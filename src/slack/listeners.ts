@@ -6,6 +6,35 @@ import { MessageQueue } from '../queue/message-queue.js';
 import { toSlackMarkdown, splitMessage } from './formatters.js';
 
 const REJECT_MESSAGE = "Sorry, I'm a personal assistant and only respond to my owner. :bow:";
+const debug = process.env['DEBUG'] === 'true';
+
+const nameCache = new Map<string, string>();
+
+async function resolveUser(client: App['client'], userId: string): Promise<string> {
+  const cached = nameCache.get(userId);
+  if (cached) return cached;
+  try {
+    const res = await client.users.info({ user: userId });
+    const name = res.user?.real_name || res.user?.name || userId;
+    nameCache.set(userId, name);
+    return name;
+  } catch {
+    return userId;
+  }
+}
+
+async function resolveChannel(client: App['client'], channelId: string): Promise<string> {
+  const cached = nameCache.get(channelId);
+  if (cached) return cached;
+  try {
+    const res = await client.conversations.info({ channel: channelId });
+    const name = res.channel?.name || channelId;
+    nameCache.set(channelId, name);
+    return name;
+  } catch {
+    return channelId;
+  }
+}
 
 export function registerListeners(app: App, store: SessionStore, config: Config): void {
   const { claudeCwd, allowedUserIds } = config;
@@ -79,6 +108,14 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     const prompt = event.text.replace(new RegExp(`<@${userId}>`, 'g'), '').trim();
     if (!prompt) return;
 
+    if (debug) {
+      const [userName, channelName] = await Promise.all([
+        resolveUser(client, event.user),
+        resolveChannel(client, channelId),
+      ]);
+      console.log(`[mention] user=${userName} channel=#${channelName} thread=${threadTs} prompt="${prompt}"`);
+    }
+
     queue.enqueue(threadKey, async () => {
       const session = store.getSession(channelId, threadTs);
       await handleMessage(client, say, channelId, threadTs, prompt, session?.sessionId, threadTs);
@@ -108,6 +145,11 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
       const prompt = event.text.trim();
       if (!prompt) return;
 
+      if (debug) {
+        const userName = senderId ? await resolveUser(client, senderId) : 'unknown';
+        console.log(`[dm] user=${userName} thread=${sessionKey} prompt="${prompt}"`);
+      }
+
       queue.enqueue(threadKey, async () => {
         const session = store.getSession(channelId, sessionKey);
         await handleMessage(client, say, channelId, sessionKey, prompt, session?.sessionId, threadTs);
@@ -129,6 +171,14 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
 
     const prompt = event.text.trim();
     if (!prompt) return;
+
+    if (debug) {
+      const [userName, channelName] = await Promise.all([
+        senderId ? resolveUser(client, senderId) : Promise.resolve('unknown'),
+        resolveChannel(client, channelId),
+      ]);
+      console.log(`[thread] user=${userName} channel=#${channelName} thread=${threadTs} prompt="${prompt}"`);
+    }
 
     queue.enqueue(threadKey, async () => {
       await handleMessage(client, say, channelId, threadTs, prompt, session.sessionId, threadTs);
