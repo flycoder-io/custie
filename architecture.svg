@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <filter id="shadow" x="-4%" y="-4%" width="108%" height="112%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.1"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="10" markerHeight="7" orient="auto-start-reverse">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="10" markerHeight="7" orient="auto-start-reverse">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="10" markerHeight="7" orient="auto-start-reverse">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="520" rx="12" fill="#fafafa"/>
+
+  <!-- Title -->
+  <text x="450" y="36" text-anchor="middle" font-size="20" font-weight="700" fill="#1e293b">Joseph Bot Architecture</text>
+  <text x="450" y="56" text-anchor="middle" font-size="13" fill="#94a3b8">Slack ↔ Claude Code Bidirectional Chat</text>
+
+  <!-- ==================== -->
+  <!-- Slack Cloud -->
+  <!-- ==================== -->
+  <rect x="40" y="160" width="180" height="200" rx="12" fill="#fff" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="40" y="160" width="180" height="36" rx="12" fill="#4A154B"/>
+  <rect x="40" y="184" width="180" height="12" fill="#4A154B"/>
+  <text x="130" y="183" text-anchor="middle" font-size="13" font-weight="600" fill="#fff">Slack Cloud</text>
+
+  <!-- Slack internals -->
+  <rect x="60" y="210" width="140" height="34" rx="6" fill="#f3e8ff" stroke="#c084fc" stroke-width="1"/>
+  <text x="130" y="232" text-anchor="middle" font-size="12" fill="#7c3aed">Events API</text>
+
+  <rect x="60" y="254" width="140" height="34" rx="6" fill="#f3e8ff" stroke="#c084fc" stroke-width="1"/>
+  <text x="130" y="276" text-anchor="middle" font-size="12" fill="#7c3aed">Web API</text>
+
+  <rect x="60" y="298" width="140" height="34" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+  <text x="130" y="320" text-anchor="middle" font-size="12" fill="#b45309">Socket Mode Gateway</text>
+
+  <!-- ==================== -->
+  <!-- Personal Mac / Node Server -->
+  <!-- ==================== -->
+  <rect x="310" y="90" width="280" height="340" rx="12" fill="#fff" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="310" y="90" width="280" height="36" rx="12" fill="#1e293b"/>
+  <rect x="310" y="114" width="280" height="12" fill="#1e293b"/>
+  <text x="450" y="113" text-anchor="middle" font-size="13" font-weight="600" fill="#fff">Personal Mac — Node.js Server</text>
+
+  <!-- @slack/bolt -->
+  <rect x="334" y="142" width="132" height="40" rx="6" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="400" y="158" text-anchor="middle" font-size="11" font-weight="600" fill="#2563eb">@slack/bolt</text>
+  <text x="400" y="172" text-anchor="middle" font-size="10" fill="#64748b">Socket Mode</text>
+
+  <!-- listeners.ts -->
+  <rect x="334" y="196" width="132" height="34" rx="6" fill="#f0fdf4" stroke="#86efac" stroke-width="1"/>
+  <text x="400" y="218" text-anchor="middle" font-size="11" fill="#166534">listeners.ts</text>
+
+  <!-- formatters.ts -->
+  <rect x="334" y="244" width="132" height="34" rx="6" fill="#f0fdf4" stroke="#86efac" stroke-width="1"/>
+  <text x="400" y="266" text-anchor="middle" font-size="11" fill="#166534">formatters.ts</text>
+
+  <!-- message-queue.ts -->
+  <rect x="334" y="292" width="132" height="34" rx="6" fill="#fff7ed" stroke="#fdba74" stroke-width="1"/>
+  <text x="400" y="314" text-anchor="middle" font-size="11" fill="#9a3412">message-queue.ts</text>
+
+  <!-- claude-agent-sdk -->
+  <rect x="334" y="340" width="132" height="40" rx="6" fill="#faf5ff" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="400" y="356" text-anchor="middle" font-size="11" font-weight="600" fill="#7c3aed">claude-agent-sdk</text>
+  <text x="400" y="370" text-anchor="middle" font-size="10" fill="#64748b">query() / resume</text>
+
+  <!-- session-store.ts -->
+  <rect x="500" y="196" width="76" height="130" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="538" y="256" text-anchor="middle" font-size="11" fill="#475569" transform="rotate(-90 538 256)">session-store.ts</text>
+
+  <!-- ==================== -->
+  <!-- SQLite -->
+  <!-- ==================== -->
+  <rect x="500" y="370" width="76" height="44" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="538" y="390" text-anchor="middle" font-size="11" font-weight="600" fill="#475569">SQLite</text>
+  <text x="538" y="404" text-anchor="middle" font-size="9" fill="#94a3b8">custie.db</text>
+
+  <!-- ==================== -->
+  <!-- Claude API -->
+  <!-- ==================== -->
+  <rect x="680" y="200" width="180" height="120" rx="12" fill="#fff" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="680" y="200" width="180" height="36" rx="12" fill="#D97706"/>
+  <rect x="680" y="224" width="180" height="12" fill="#D97706"/>
+  <text x="770" y="223" text-anchor="middle" font-size="13" font-weight="600" fill="#fff">Anthropic API</text>
+
+  <rect x="700" y="250" width="140" height="28" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+  <text x="770" y="269" text-anchor="middle" font-size="11" fill="#92400e">Claude Opus / Sonnet</text>
+
+  <rect x="700" y="284" width="140" height="24" rx="6" fill="#fefce8" stroke="#fde047" stroke-width="1"/>
+  <text x="770" y="300" text-anchor="middle" font-size="10" fill="#a16207">Tools: Read, Edit, Bash...</text>
+
+  <!-- ==================== -->
+  <!-- Connection Lines -->
+  <!-- ==================== -->
+
+  <!-- Slack ↔ Bolt (WebSocket) -->
+  <line x1="220" y1="315" x2="334" y2="162" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrow-blue)" marker-start="url(#arrow-blue)"/>
+  <rect x="232" y="222" width="88" height="20" rx="4" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+  <text x="276" y="236" text-anchor="middle" font-size="9" font-weight="600" fill="#3b82f6">WebSocket</text>
+
+  <!-- Bolt → Listeners -->
+  <line x1="400" y1="182" x2="400" y2="196" stroke="#64748b" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- Listeners → Formatters -->
+  <line x1="400" y1="230" x2="400" y2="244" stroke="#64748b" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- Listeners → Queue -->
+  <line x1="400" y1="278" x2="400" y2="292" stroke="#64748b" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- Queue → Agent SDK -->
+  <line x1="400" y1="326" x2="400" y2="340" stroke="#64748b" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- Listeners → Session Store -->
+  <line x1="466" y1="213" x2="500" y2="240" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+
+  <!-- Session Store → SQLite -->
+  <line x1="538" y1="326" x2="538" y2="370" stroke="#94a3b8" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- Agent SDK → Claude API -->
+  <line x1="466" y1="360" x2="680" y2="260" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arrow-purple)" marker-start="url(#arrow-purple)"/>
+  <rect x="540" y="294" width="72" height="20" rx="4" fill="#faf5ff" stroke="#ddd6fe" stroke-width="1"/>
+  <text x="576" y="308" text-anchor="middle" font-size="9" font-weight="600" fill="#7c3aed">HTTPS</text>
+
+  <!-- ==================== -->
+  <!-- Legend -->
+  <!-- ==================== -->
+  <rect x="40" y="440" width="820" height="60" rx="8" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="60" y="462" font-size="11" font-weight="600" fill="#475569">Key:</text>
+
+  <line x1="100" y1="458" x2="130" y2="458" stroke="#3b82f6" stroke-width="2"/>
+  <text x="136" y="462" font-size="10" fill="#64748b">WebSocket (persistent, bidirectional)</text>
+
+  <line x1="340" y1="458" x2="370" y2="458" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="376" y="462" font-size="10" fill="#64748b">HTTPS (SDK → API, per query)</text>
+
+  <line x1="570" y1="458" x2="600" y2="458" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="606" y="462" font-size="10" fill="#64748b">Internal (in-process)</text>
+
+  <text x="60" y="486" font-size="10" fill="#94a3b8">No webhook, no tunnel, no public URL needed. All connections are outbound from your Mac.</text>
+</svg>
