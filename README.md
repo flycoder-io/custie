@@ -2,7 +2,7 @@
 
 A bidirectional chat server that bridges **Slack** and **Claude Code** via the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk). Mention the bot in a channel or DM it directly to start an AI-powered conversation that persists across messages.
 
-![Architecture](architecture.png)
+![Architecture](architecture.svg)
 
 ## Features
 

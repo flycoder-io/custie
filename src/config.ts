@@ -5,6 +5,7 @@ export interface Config {
   slackAppToken: string;
   slackSigningSecret: string;
   claudeCwd: string;
+  botName: string;
   allowedUserIds: Set<string>;
 }
 
@@ -22,6 +23,7 @@ export function loadConfig(): Config {
     slackAppToken: requireEnv('SLACK_APP_TOKEN'),
     slackSigningSecret: requireEnv('SLACK_SIGNING_SECRET'),
     claudeCwd: process.env['CLAUDE_CWD'] ?? process.cwd(),
+    botName: process.env['BOT_NAME'] ?? 'Custie',
     allowedUserIds: new Set(
       (process.env['ALLOWED_USER_IDS'] ?? '').split(',').map((s) => s.trim()).filter(Boolean),
     ),
