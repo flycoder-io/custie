@@ -5,7 +5,17 @@ import { askClaude } from '../claude/agent.js';
 import { MessageQueue } from '../queue/message-queue.js';
 import { toSlackMarkdown, splitMessage } from './formatters.js';
 
-const REJECT_MESSAGE = "Sorry, I'm a personal assistant and only respond to my owner. :bow:";
+const REJECT_MESSAGES = [
+  "Sorry, I'm a personal assistant and only respond to my owner. :bow:",
+  "I appreciate the interest, but I'm exclusively dedicated to my owner. :lock:",
+  "Flattered you'd ask, but I'm a one-person bot. :robot_face:",
+  "I'm on a strict guest list, and you're not on it — yet! :clipboard:",
+  "My owner keeps me on a short leash. Nothing personal! :dog:",
+];
+
+function getRejectMessage(): string {
+  return REJECT_MESSAGES[Math.floor(Math.random() * REJECT_MESSAGES.length)]!;
+}
 const debug = process.env['DEBUG'] === 'true';
 
 const nameCache = new Map<string, string>();
@@ -37,7 +47,7 @@ async function resolveChannel(client: App['client'], channelId: string): Promise
 }
 
 export function registerListeners(app: App, store: SessionStore, config: Config): void {
-  const { claudeCwd, allowedUserIds } = config;
+  const { claudeCwd, botName, allowedUserIds } = config;
   const queue = new MessageQueue();
   let botUserId: string | undefined;
 
@@ -65,7 +75,7 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     })) as { ts: string };
 
     try {
-      const response = await askClaude(prompt, claudeCwd, sessionId);
+      const response = await askClaude(prompt, claudeCwd, botName, sessionId);
       store.saveSession(channelId, sessionKey, response.sessionId);
 
       const formatted = toSlackMarkdown(response.text);
@@ -100,7 +110,7 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     const threadKey = `${channelId}:${threadTs}`;
 
     if (allowedUserIds.size > 0 && !allowedUserIds.has(event.user)) {
-      await say({ text: REJECT_MESSAGE, thread_ts: threadTs });
+      await say({ text: getRejectMessage(), thread_ts: threadTs });
       return;
     }
 
@@ -167,7 +177,10 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     if (!session) return;
 
     const userId = await ensureBotUserId(client);
+    // Skip if message mentions the bot (handled by app_mention)
     if (event.text.includes(`<@${userId}>`)) return;
+    // Skip if message mentions another user — they're talking to someone else
+    if (/<@U[A-Z0-9]+>/.test(event.text)) return;
 
     const prompt = event.text.trim();
     if (!prompt) return;
