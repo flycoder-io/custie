@@ -1,4 +1,4 @@
-const SLACK_MAX_LENGTH = 3900; // Leave some buffer under the 4000 limit
+const SLACK_MAX_LENGTH = 2900; // Stay under Slack's 3000-char section block limit
 
 // Convert markdown to Slack mrkdwn
 export function toSlackMarkdown(text: string): string {

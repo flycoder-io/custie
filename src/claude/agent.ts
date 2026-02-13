@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
 export interface ClaudeResponse {
@@ -5,35 +7,44 @@ export interface ClaudeResponse {
   text: string;
 }
 
-export async function askClaude(
-  prompt: string,
-  cwd: string,
-  botName: string,
-  resumeSessionId?: string,
-): Promise<ClaudeResponse> {
+const debug = process.env['DEBUG'] === 'true';
+
+function loadSystemPrompt(): string {
+  const root = resolve(import.meta.dirname, '../..');
+  const customPath = resolve(root, 'system.md');
+  const defaultPath = resolve(root, 'system.default.md');
+  const filePath = existsSync(customPath) ? customPath : defaultPath;
+  return readFileSync(filePath, 'utf-8').trim();
+}
+
+function buildSystemPrompt(botName: string): string {
+  return loadSystemPrompt().replaceAll('{{botName}}', botName);
+}
+
+function buildOptions(cwd: string, botName: string, claudeConfigDir?: string, resumeSessionId?: string) {
+  return {
+    cwd,
+    ...(claudeConfigDir ? { env: { ...process.env, CLAUDE_CONFIG_DIR: claudeConfigDir } } : {}),
+    permissionMode: 'bypassPermissions' as const,
+    allowDangerouslySkipPermissions: true,
+    systemPrompt: {
+      type: 'preset' as const,
+      preset: 'claude_code' as const,
+      append: buildSystemPrompt(botName),
+    },
+    maxTurns: 3,
+    settingSources: ['user', 'project', 'local'] as const,
+    ...(resumeSessionId ? { resume: resumeSessionId } : {}),
+  };
+}
+
+async function runQuery(prompt: string, cwd: string, botName: string, claudeConfigDir?: string, resumeSessionId?: string) {
   let sessionId = resumeSessionId ?? '';
   let resultText = '';
 
   const conversation = query({
     prompt,
-    options: {
-      cwd,
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
-      systemPrompt: {
-        type: 'preset',
-        preset: 'claude_code',
-        append: [
-          `You are "${botName}", a Slack bot powered by Claude. Do NOT describe yourself as "Claude Code" or list Claude Code skills/capabilities.`,
-          '',
-          'IMPORTANT: You are responding in Slack. Keep responses concise and conversational. Avoid long lists, verbose explanations, or walls of text. Use short paragraphs and bullet points sparingly.',
-          '',
-          'Your architecture: Slack (Socket Mode) → Node.js server on a personal Mac (@slack/bolt, TypeScript) → Claude Agent SDK → Anthropic API (Claude Opus/Sonnet). Sessions persisted in SQLite. No webhooks needed — all connections are outbound.',
-        ].join('\n'),
-      },
-      settingSources: ['user', 'project', 'local'],
-      ...(resumeSessionId ? { resume: resumeSessionId } : {}),
-    },
+    options: buildOptions(cwd, botName, claudeConfigDir, resumeSessionId),
   });
 
   for await (const message of conversation) {
@@ -55,4 +66,22 @@ export async function askClaude(
   }
 
   return { sessionId, text: resultText };
+}
+
+export async function askClaude(
+  prompt: string,
+  cwd: string,
+  botName: string,
+  claudeConfigDir?: string,
+  resumeSessionId?: string,
+): Promise<ClaudeResponse> {
+  try {
+    return await runQuery(prompt, cwd, botName, claudeConfigDir, resumeSessionId);
+  } catch (err) {
+    if (resumeSessionId) {
+      if (debug) console.log(`[agent] session resume failed, starting fresh session`);
+      return await runQuery(prompt, cwd, botName, claudeConfigDir);
+    }
+    throw err;
+  }
 }

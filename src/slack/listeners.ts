@@ -46,8 +46,30 @@ async function resolveChannel(client: App['client'], channelId: string): Promise
   }
 }
 
+const SESSION_ID_PATTERN = /claude\s+--resume\s+([0-9a-f-]{36})/;
+
+async function extractSessionFromParent(
+  client: App['client'],
+  channelId: string,
+  threadTs: string,
+): Promise<string | undefined> {
+  try {
+    const res = await client.conversations.replies({
+      channel: channelId,
+      ts: threadTs,
+      limit: 1,
+      inclusive: true,
+    });
+    const parentText = res.messages?.[0]?.text ?? '';
+    const match = parentText.match(SESSION_ID_PATTERN);
+    return match?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
 export function registerListeners(app: App, store: SessionStore, config: Config): void {
-  const { claudeCwd, botName, allowedUserIds } = config;
+  const { claudeCwd, claudeConfigDir, botName, allowedUserIds } = config;
   const queue = new MessageQueue();
   let botUserId: string | undefined;
 
@@ -75,11 +97,15 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     })) as { ts: string };
 
     try {
-      const response = await askClaude(prompt, claudeCwd, botName, sessionId);
+      const response = await askClaude(prompt, claudeCwd, botName, claudeConfigDir, sessionId);
       store.saveSession(channelId, sessionKey, response.sessionId);
 
       const formatted = toSlackMarkdown(response.text);
       const chunks = splitMessage(formatted);
+
+      if (debug) {
+        console.log(`[response] length=${response.text.length} chunks=${chunks.length} chunkSizes=[${chunks.map((c) => c.length).join(',')}]`);
+      }
 
       // Update the typing message with the first chunk
       await client.chat.update({
@@ -127,8 +153,14 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     }
 
     queue.enqueue(threadKey, async () => {
-      const session = store.getSession(channelId, threadTs);
-      await handleMessage(client, say, channelId, threadTs, prompt, session?.sessionId, threadTs);
+      let sessionId = store.getSession(channelId, threadTs)?.sessionId;
+      if (!sessionId) {
+        sessionId = await extractSessionFromParent(client, channelId, threadTs);
+        if (debug && sessionId) {
+          console.log(`[mention] resuming session from parent message: ${sessionId}`);
+        }
+      }
+      await handleMessage(client, say, channelId, threadTs, prompt, sessionId, threadTs);
     });
   });
 
