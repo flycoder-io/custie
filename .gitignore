@@ -4,6 +4,7 @@ dist/
 *.db-shm
 *.db-wal
 .env
+system.md
 .DS_Store
 .idea/
 io.flycoder.custie.plist
