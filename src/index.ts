@@ -1,8 +1,8 @@
 import path from 'node:path';
-import { loadConfig } from './config.js';
-import { createSlackApp } from './slack/app.js';
-import { registerListeners } from './slack/listeners.js';
-import { SessionStore } from './store/session-store.js';
+import { loadConfig } from './config';
+import { createSlackApp } from './slack/app';
+import { registerListeners } from './slack/listeners';
+import { SessionStore } from './store/session-store';
 
 async function main(): Promise<void> {
   const config = loadConfig();

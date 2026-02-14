@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
 export interface ClaudeResponse {
   sessionId: string;
@@ -21,7 +21,13 @@ function buildSystemPrompt(botName: string): string {
   return loadSystemPrompt().replaceAll('{{botName}}', botName);
 }
 
-function buildOptions(cwd: string, botName: string, claudeConfigDir?: string, resumeSessionId?: string) {
+function buildOptions(
+  cwd: string,
+  botName: string,
+  maxTurns: number,
+  claudeConfigDir?: string,
+  resumeSessionId?: string,
+): Options {
   return {
     cwd,
     ...(claudeConfigDir ? { env: { ...process.env, CLAUDE_CONFIG_DIR: claudeConfigDir } } : {}),
@@ -32,19 +38,26 @@ function buildOptions(cwd: string, botName: string, claudeConfigDir?: string, re
       preset: 'claude_code' as const,
       append: buildSystemPrompt(botName),
     },
-    maxTurns: 3,
-    settingSources: ['user', 'project', 'local'] as const,
+    maxTurns,
+    settingSources: ['user', 'project', 'local'],
     ...(resumeSessionId ? { resume: resumeSessionId } : {}),
   };
 }
 
-async function runQuery(prompt: string, cwd: string, botName: string, claudeConfigDir?: string, resumeSessionId?: string) {
+async function runQuery(
+  prompt: string,
+  cwd: string,
+  botName: string,
+  maxTurns: number,
+  claudeConfigDir?: string,
+  resumeSessionId?: string,
+) {
   let sessionId = resumeSessionId ?? '';
   let resultText = '';
 
   const conversation = query({
     prompt,
-    options: buildOptions(cwd, botName, claudeConfigDir, resumeSessionId),
+    options: buildOptions(cwd, botName, maxTurns, claudeConfigDir, resumeSessionId),
   });
 
   for await (const message of conversation) {
@@ -58,10 +71,17 @@ async function runQuery(prompt: string, cwd: string, botName: string, claudeConf
 
     if (message.type === 'result' && message.subtype !== 'success') {
       const errMsg = message as Record<string, unknown>;
-      const errors = Array.isArray(errMsg['errors'])
-        ? (errMsg['errors'] as string[]).join(', ')
-        : 'Unknown error';
-      resultText = `Error: ${errors}`;
+      if (debug) console.log(`[agent] error result:`, JSON.stringify(errMsg));
+
+      if (errMsg['subtype'] === 'error_max_turns') {
+        resultText =
+          "That query was a bit too complex for me to handle here. You can continue this session directly:\n" +
+          `\`claude --resume ${sessionId}\``;
+      } else {
+        const errorList = Array.isArray(errMsg['errors']) ? (errMsg['errors'] as string[]) : [];
+        const errors = errorList.filter(Boolean).join(', ') || 'Unknown error';
+        resultText = `Error: ${errors}`;
+      }
     }
   }
 
@@ -72,15 +92,16 @@ export async function askClaude(
   prompt: string,
   cwd: string,
   botName: string,
+  maxTurns: number,
   claudeConfigDir?: string,
   resumeSessionId?: string,
 ): Promise<ClaudeResponse> {
   try {
-    return await runQuery(prompt, cwd, botName, claudeConfigDir, resumeSessionId);
+    return await runQuery(prompt, cwd, botName, maxTurns, claudeConfigDir, resumeSessionId);
   } catch (err) {
     if (resumeSessionId) {
       if (debug) console.log(`[agent] session resume failed, starting fresh session`);
-      return await runQuery(prompt, cwd, botName, claudeConfigDir);
+      return await runQuery(prompt, cwd, botName, maxTurns, claudeConfigDir);
     }
     throw err;
   }

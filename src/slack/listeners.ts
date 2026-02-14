@@ -1,9 +1,9 @@
 import type { App } from '@slack/bolt';
-import type { Config } from '../config.js';
-import type { SessionStore } from '../store/session-store.js';
-import { askClaude } from '../claude/agent.js';
-import { MessageQueue } from '../queue/message-queue.js';
-import { toSlackMarkdown, splitMessage } from './formatters.js';
+import type { Config } from '../config';
+import type { SessionStore } from '../store/session-store';
+import { askClaude } from '../claude/agent';
+import { MessageQueue } from '../queue/message-queue';
+import { toSlackMarkdown, splitMessage } from './formatters';
 
 const REJECT_MESSAGES = [
   "Sorry, I'm a personal assistant and only respond to my owner. :bow:",
@@ -69,7 +69,7 @@ async function extractSessionFromParent(
 }
 
 export function registerListeners(app: App, store: SessionStore, config: Config): void {
-  const { claudeCwd, claudeConfigDir, botName, allowedUserIds } = config;
+  const { claudeCwd, claudeConfigDir, botName, allowedUserIds, maxTurns } = config;
   const queue = new MessageQueue();
   let botUserId: string | undefined;
 
@@ -97,7 +97,7 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     })) as { ts: string };
 
     try {
-      const response = await askClaude(prompt, claudeCwd, botName, claudeConfigDir, sessionId);
+      const response = await askClaude(prompt, claudeCwd, botName, maxTurns, claudeConfigDir, sessionId);
       store.saveSession(channelId, sessionKey, response.sessionId);
 
       const formatted = toSlackMarkdown(response.text);
@@ -135,6 +135,7 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     const channelId = event.channel;
     const threadKey = `${channelId}:${threadTs}`;
 
+    if (!event.user) return;
     if (allowedUserIds.size > 0 && !allowedUserIds.has(event.user)) {
       await say({ text: getRejectMessage(), thread_ts: threadTs });
       return;

@@ -46,7 +46,7 @@ npm run setup        # Interactive first-time setup
 - Prettier: 100 char width, 2-space indent, single quotes, trailing commas, semicolons
 - Linting: oxlint
 - Use `export * from` for re-exports
-- Suffix `.js` on relative imports (ESM requirement)
+- No `.js` suffix on relative imports (bundler module resolution)
 
 ## Environment Variables
 
