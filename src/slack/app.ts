@@ -1,5 +1,5 @@
 import { App } from '@slack/bolt';
-import type { Config } from '../config.js';
+import type { Config } from '../config';
 
 export function createSlackApp(config: Config): App {
   return new App({

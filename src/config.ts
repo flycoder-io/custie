@@ -8,6 +8,7 @@ export interface Config {
   claudeConfigDir?: string;
   botName: string;
   allowedUserIds: Set<string>;
+  maxTurns: number;
 }
 
 function requireEnv(name: string): string {
@@ -29,5 +30,6 @@ export function loadConfig(): Config {
     allowedUserIds: new Set(
       (process.env['ALLOWED_USER_IDS'] ?? '').split(',').map((s) => s.trim()).filter(Boolean),
     ),
+    maxTurns: parseInt(process.env['MAX_TURNS'] ?? '3', 10),
   };
 }
