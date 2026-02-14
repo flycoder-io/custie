@@ -46,6 +46,7 @@ async function resolveChannel(client: App['client'], channelId: string): Promise
   }
 }
 
+const SUBTEAM_MENTION_PATTERN = /<!subteam\^(S[A-Z0-9]+)(?:\|[^>]*)?>/g;
 const SESSION_ID_PATTERN = /claude\s+--resume\s+([0-9a-f-]{36})/;
 
 async function extractSessionFromParent(
@@ -68,8 +69,31 @@ async function extractSessionFromParent(
   }
 }
 
+// Cache: subteam ID → Set of member user IDs (refreshed every 10 minutes)
+const groupMemberCache = new Map<string, { members: Set<string>; fetchedAt: number }>();
+const GROUP_CACHE_TTL = 10 * 60 * 1000;
+
+async function isOwnerInSubteam(
+  client: App['client'],
+  subteamId: string,
+  ownerUserId: string,
+): Promise<boolean> {
+  const cached = groupMemberCache.get(subteamId);
+  if (cached && Date.now() - cached.fetchedAt < GROUP_CACHE_TTL) {
+    return cached.members.has(ownerUserId);
+  }
+  try {
+    const res = await client.usergroups.users.list({ usergroup: subteamId });
+    const members = new Set(res.users ?? []);
+    groupMemberCache.set(subteamId, { members, fetchedAt: Date.now() });
+    return members.has(ownerUserId);
+  } catch {
+    return false;
+  }
+}
+
 export function registerListeners(app: App, store: SessionStore, config: Config): void {
-  const { claudeCwd, claudeConfigDir, botName, allowedUserIds, maxTurns } = config;
+  const { claudeCwd, claudeConfigDir, botName, allowedUserIds, maxTurns, ownerUserId } = config;
   const queue = new MessageQueue();
   let botUserId: string | undefined;
 
@@ -169,6 +193,33 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     if (!('text' in event) || !event.text) return;
     if ('bot_id' in event && event.bot_id) return;
     if ('subtype' in event && event.subtype) return;
+
+    // React with eyes emoji when someone mentions the owner (directly or via group)
+    if (ownerUserId) {
+      let ownerMentioned = event.text.includes(`<@${ownerUserId}>`);
+
+      if (!ownerMentioned) {
+        const subteamIds = [...event.text.matchAll(SUBTEAM_MENTION_PATTERN)].map((m) => m[1]!);
+        for (const subteamId of subteamIds) {
+          if (await isOwnerInSubteam(client, subteamId, ownerUserId)) {
+            ownerMentioned = true;
+            break;
+          }
+        }
+      }
+
+      if (ownerMentioned) {
+        try {
+          await client.reactions.add({
+            channel: event.channel,
+            timestamp: event.ts,
+            name: 'eyes',
+          });
+        } catch (err) {
+          if (debug) console.log('[owner-mention] Failed to add eyes reaction:', err);
+        }
+      }
+    }
 
     const senderId = ('user' in event ? event.user : undefined) as string | undefined;
     if (allowedUserIds.size > 0 && (!senderId || !allowedUserIds.has(senderId))) return;

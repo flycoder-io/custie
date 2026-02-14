@@ -9,6 +9,7 @@ export interface Config {
   botName: string;
   allowedUserIds: Set<string>;
   maxTurns: number;
+  ownerUserId?: string;
 }
 
 function requireEnv(name: string): string {
@@ -20,6 +21,17 @@ function requireEnv(name: string): string {
 }
 
 export function loadConfig(): Config {
+  const ownerUserId = process.env['OWNER_USER_ID'] || undefined;
+  const allowedUserIds = new Set(
+    (process.env['ALLOWED_USER_IDS'] ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  );
+
+  // If ALLOWED_USER_IDS is set, ensure the owner is included automatically
+  // If ALLOWED_USER_IDS is empty, keep it empty (open to everyone)
+  if (ownerUserId && allowedUserIds.size > 0) {
+    allowedUserIds.add(ownerUserId);
+  }
+
   return {
     slackBotToken: requireEnv('SLACK_BOT_TOKEN'),
     slackAppToken: requireEnv('SLACK_APP_TOKEN'),
@@ -27,9 +39,8 @@ export function loadConfig(): Config {
     claudeCwd: process.env['CLAUDE_CWD'] ?? process.cwd(),
     claudeConfigDir: process.env['CLAUDE_CONFIG_DIR'] || undefined,
     botName: process.env['BOT_NAME'] ?? 'Custie',
-    allowedUserIds: new Set(
-      (process.env['ALLOWED_USER_IDS'] ?? '').split(',').map((s) => s.trim()).filter(Boolean),
-    ),
+    allowedUserIds,
     maxTurns: parseInt(process.env['MAX_TURNS'] ?? '3', 10),
+    ownerUserId,
   };
 }
