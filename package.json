@@ -1,6 +1,6 @@
 {
   "name": "custie",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "Claude Code, inside your Slack",
   "license": "MIT",
   "type": "module",
@@ -20,16 +20,20 @@
     "start": "node dist/cli.js start",
     "lint": "oxlint src/",
     "format": "prettier --write src/",
-    "format:check": "prettier --check src/"
+    "format:check": "prettier --check src/",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.3.2",
     "@slack/bolt": "^4.6.0",
     "better-sqlite3": "^12.6.2",
-    "dotenv": "^17.2.4"
+    "dotenv": "^17.2.4",
+    "js-yaml": "^4.1.1",
+    "node-cron": "^4.2.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.2.3",
     "oxlint": "^1.46.0",
     "playwright": "^1.58.2",
