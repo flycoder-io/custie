@@ -77,7 +77,7 @@ Optional: `CLAUDE_CWD` (working directory for Claude), `ALLOWED_USER_IDS` (comma
 ## File Locations
 
 - **Config file:** `~/.config/custie/config.env` (primary) or repo `.env` (fallback)
-- **System prompt:** `~/.config/custie/prompt.md` (user-customized) or `system.default.md` (package default)
+- **System prompt:** `~/.config/custie/prompt.md` (user-customized) or `system.default.md` (package default). Capabilities from `system.capabilities.md` are always appended at runtime.
 - **Database:** `~/.local/share/custie/custie.db`
 - **Logs:** `~/.local/share/custie/logs/`
 

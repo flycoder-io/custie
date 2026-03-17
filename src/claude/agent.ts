@@ -18,8 +18,16 @@ function loadSystemPrompt(): string {
   return readFileSync(filePath, 'utf-8').trim();
 }
 
+function loadCapabilities(): string {
+  const capabilitiesPath = resolve(paths.PACKAGE_ROOT, 'system.capabilities.md');
+  if (!existsSync(capabilitiesPath)) return '';
+  return readFileSync(capabilitiesPath, 'utf-8').trim();
+}
+
 function buildSystemPrompt(botName: string): string {
-  return loadSystemPrompt().replaceAll('{{botName}}', botName);
+  const prompt = loadSystemPrompt().replaceAll('{{botName}}', botName);
+  const capabilities = loadCapabilities();
+  return capabilities ? `${prompt}\n\n${capabilities}` : prompt;
 }
 
 function buildArgs(
