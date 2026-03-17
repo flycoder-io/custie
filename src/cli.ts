@@ -10,6 +10,7 @@ import {
   runPause,
   runResume,
   runLogs,
+  runSlackCmd,
 } from './commands';
 
 const USAGE = `
@@ -27,6 +28,7 @@ const USAGE = `
     prompt       Edit the system prompt in $EDITOR
     config       Show resolved config (--edit to edit, --path for file path)
     automation   Manage scheduled tasks and triggers
+    slack        Query Slack (channels, users, post messages)
 
   Options:
     -h, --help      Show this help message
@@ -83,6 +85,10 @@ async function main(): Promise<void> {
 
     case 'automation':
       await runAutomationCmd(args.slice(1));
+      break;
+
+    case 'slack':
+      await runSlackCmd(args.slice(1));
       break;
 
     case '-v':

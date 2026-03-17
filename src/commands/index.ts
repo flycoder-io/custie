@@ -8,3 +8,4 @@ export * from './upgrade';
 export * from './automation';
 export * from './pause';
 export * from './logs';
+export * from './slack';
