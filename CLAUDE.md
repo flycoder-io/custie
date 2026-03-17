@@ -34,6 +34,11 @@ custie prompt            # Edit the system prompt in $EDITOR
 custie config            # Show resolved config (paths, loaded values with tokens masked)
 custie config --edit     # Open config.env in $EDITOR
 custie config --path     # Print the config file path
+custie slack channels    # List channels the bot is in
+custie slack users       # List workspace users
+custie slack channel-info <name-or-id>  # Channel details
+custie slack user-info <name-or-id>     # User details
+custie slack post --channel <ch> --text <text>  # Post a message
 ```
 
 ## Development Commands

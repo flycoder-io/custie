@@ -117,6 +117,7 @@ export function registerListeners(
     channelId: string,
     sessionKey: string,
     prompt: string,
+    senderId?: string,
     sessionId?: string,
     threadTs?: string,
   ): Promise<void> {
@@ -128,8 +129,19 @@ export function registerListeners(
     })) as { ts: string };
 
     try {
+      // Build context-enriched prompt so Claude knows where and who
+      const [channelName, senderName] = await Promise.all([
+        resolveChannel(client, channelId),
+        senderId ? resolveUser(client, senderId) : Promise.resolve('unknown'),
+      ]);
+      const contextPrefix =
+        `[context: channel=#${channelName} (${channelId}), sender=${senderName}` +
+        (threadTs ? `, thread=${threadTs}` : '') +
+        ']\n\n';
+      const enrichedPrompt = contextPrefix + prompt;
+
       const response = await askClaude(
-        prompt,
+        enrichedPrompt,
         claudeCwd,
         botName,
         maxTurns,
@@ -203,7 +215,7 @@ export function registerListeners(
           console.log(`[mention] resuming session from parent message: ${sessionId}`);
         }
       }
-      await handleMessage(client, say, channelId, threadTs, prompt, sessionId, threadTs);
+      await handleMessage(client, say, channelId, threadTs, prompt, event.user, sessionId, threadTs);
     });
   });
 
@@ -287,6 +299,7 @@ export function registerListeners(
           channelId,
           sessionKey,
           prompt,
+          senderId,
           session?.sessionId,
           threadTs,
         );
@@ -323,7 +336,7 @@ export function registerListeners(
     }
 
     queue.enqueue(threadKey, async () => {
-      await handleMessage(client, say, channelId, threadTs, prompt, session.sessionId, threadTs);
+      await handleMessage(client, say, channelId, threadTs, prompt, senderId, session.sessionId, threadTs);
     });
   });
 }
