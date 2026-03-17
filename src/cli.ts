@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module';
 import { runStart, runSetup, runInstall, runUninstall, runPrompt, runConfig, runUpgrade } from './commands';
 
 const USAGE = `
@@ -18,11 +17,7 @@ const USAGE = `
     -v, --version   Show version number
 `;
 
-function getVersion(): string {
-  const require = createRequire(import.meta.url);
-  const pkg = require('../package.json') as { version: string };
-  return pkg.version;
-}
+declare const __VERSION__: string;
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -59,7 +54,7 @@ async function main(): Promise<void> {
 
     case '-v':
     case '--version':
-      console.log(getVersion());
+      console.log(__VERSION__);
       break;
 
     case '-h':
