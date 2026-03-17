@@ -23,6 +23,7 @@
     "format:check": "prettier --check src/"
   },
   "dependencies": {
+    "@inquirer/prompts": "^8.3.2",
     "@slack/bolt": "^4.6.0",
     "better-sqlite3": "^12.6.2",
     "dotenv": "^17.2.4"

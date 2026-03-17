@@ -5,7 +5,7 @@ const USAGE = `
 
   Commands:
     start        Start the Slack bot server
-    setup        Interactive first-time setup (--browser for Playwright automation)
+    setup        Interactive first-time setup (guided or browser-automated)
     install      Install as a system service (launchd / systemd)
     uninstall    Remove the system service
     upgrade      Upgrade custie to the latest version
