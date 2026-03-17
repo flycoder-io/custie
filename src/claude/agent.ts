@@ -1,6 +1,6 @@
+import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
 export interface ClaudeResponse {
   sessionId: string;
@@ -21,87 +21,139 @@ function buildSystemPrompt(botName: string): string {
   return loadSystemPrompt().replaceAll('{{botName}}', botName);
 }
 
-function buildOptions(
-  cwd: string,
+function buildArgs(
+  prompt: string,
   botName: string,
-  maxTurns: number,
-  claudeConfigDir?: string,
   resumeSessionId?: string,
-): Options {
-  return {
-    cwd,
-    ...(claudeConfigDir ? { env: { ...process.env, CLAUDE_CONFIG_DIR: claudeConfigDir } } : {}),
-    permissionMode: 'bypassPermissions' as const,
-    allowDangerouslySkipPermissions: true,
-    systemPrompt: {
-      type: 'preset' as const,
-      preset: 'claude_code' as const,
-      append: buildSystemPrompt(botName),
-    },
-    maxTurns,
-    settingSources: ['user', 'project', 'local'],
-    ...(resumeSessionId ? { resume: resumeSessionId } : {}),
-  };
+): string[] {
+  const args = [
+    '--print',
+    '--output-format',
+    'json',
+    '--dangerously-skip-permissions',
+    '--no-chrome',
+    '--append-system-prompt',
+    buildSystemPrompt(botName),
+    '--setting-sources',
+    'user,project,local',
+  ];
+
+  if (resumeSessionId) {
+    args.push('--resume', resumeSessionId);
+  }
+
+  args.push(prompt);
+
+  return args;
 }
 
-async function runQuery(
+function runCli(
   prompt: string,
   cwd: string,
   botName: string,
-  maxTurns: number,
   claudeConfigDir?: string,
   resumeSessionId?: string,
-) {
-  let sessionId = resumeSessionId ?? '';
-  let resultText = '';
-
-  const conversation = query({
-    prompt,
-    options: buildOptions(cwd, botName, maxTurns, claudeConfigDir, resumeSessionId),
-  });
-
-  for await (const message of conversation) {
-    if (message.type === 'system' && message.subtype === 'init') {
-      sessionId = message.session_id;
+): Promise<ClaudeResponse> {
+  return new Promise((resolve, reject) => {
+    const args = buildArgs(prompt, botName, resumeSessionId);
+    const env = { ...process.env };
+    if (claudeConfigDir) {
+      env['CLAUDE_CONFIG_DIR'] = claudeConfigDir;
     }
 
-    if (message.type === 'result' && message.subtype === 'success') {
-      resultText = (message as Extract<SDKMessage, { type: 'result'; subtype: 'success' }>).result;
+    if (debug) {
+      console.log(`[agent] spawning claude CLI in ${cwd}`);
+      console.log(`[agent] args: ${args.join(' ')}`);
     }
 
-    if (message.type === 'result' && message.subtype !== 'success') {
-      const errMsg = message as Record<string, unknown>;
-      if (debug) console.log(`[agent] error result:`, JSON.stringify(errMsg));
+    const child = spawn('claude', args, {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
 
-      if (errMsg['subtype'] === 'error_max_turns') {
-        resultText =
-          "That query was a bit too complex for me to handle here. You can continue this session directly:\n" +
-          `\`claude --resume ${sessionId}\``;
-      } else {
-        const errorList = Array.isArray(errMsg['errors']) ? (errMsg['errors'] as string[]) : [];
-        const errors = errorList.filter(Boolean).join(', ') || 'Unknown error';
-        resultText = `Error: ${errors}`;
+    // Close stdin immediately — CLI in -p mode reads the prompt from args,
+    // but will hang waiting for stdin EOF if left open.
+    child.stdin.end();
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    child.on('error', (err) => {
+      reject(new Error(`Failed to spawn claude CLI: ${err.message}`));
+    });
+
+    child.on('close', (code) => {
+      if (debug && stderr) {
+        console.log(`[agent] stderr: ${stderr.trim()}`);
       }
-    }
-  }
 
-  return { sessionId, text: resultText };
+      if (code !== 0 && !stdout.trim()) {
+        reject(new Error(`claude CLI exited with code ${code}: ${stderr.trim()}`));
+        return;
+      }
+
+      try {
+        const result = JSON.parse(stdout.trim()) as {
+          type: string;
+          subtype: string;
+          result?: string;
+          session_id?: string;
+          errors?: string[];
+        };
+
+        const sessionId = result.session_id ?? resumeSessionId ?? '';
+
+        if (result.type === 'result' && result.subtype === 'success') {
+          resolve({ sessionId, text: result.result ?? '' });
+          return;
+        }
+
+        // Handle error results
+        if (debug) console.log(`[agent] error result:`, JSON.stringify(result));
+
+        if (result.subtype === 'error_max_turns') {
+          resolve({
+            sessionId,
+            text:
+              "That query was a bit too complex for me to handle here. You can continue this session directly:\n" +
+              `\`claude --resume ${sessionId}\``,
+          });
+          return;
+        }
+
+        const errors = (result.errors ?? []).filter(Boolean).join(', ') || 'Unknown error';
+        resolve({ sessionId, text: `Error: ${errors}` });
+      } catch {
+        // If JSON parsing fails, treat stdout as plain text
+        resolve({ sessionId: resumeSessionId ?? '', text: stdout.trim() || 'No response' });
+      }
+    });
+  });
 }
 
 export async function askClaude(
   prompt: string,
   cwd: string,
   botName: string,
-  maxTurns: number,
+  _maxTurns: number,
   claudeConfigDir?: string,
   resumeSessionId?: string,
 ): Promise<ClaudeResponse> {
   try {
-    return await runQuery(prompt, cwd, botName, maxTurns, claudeConfigDir, resumeSessionId);
+    return await runCli(prompt, cwd, botName, claudeConfigDir, resumeSessionId);
   } catch (err) {
     if (resumeSessionId) {
       if (debug) console.log(`[agent] session resume failed, starting fresh session`);
-      return await runQuery(prompt, cwd, botName, maxTurns, claudeConfigDir);
+      return await runCli(prompt, cwd, botName, claudeConfigDir);
     }
     throw err;
   }

@@ -2,12 +2,12 @@
 
 ## What This Is
 
-Slack bot that bridges Slack messages to Claude Code via the Claude Agent SDK. Users mention the bot or DM it; messages are queued per-thread, sent to Claude, and responses are posted back to Slack.
+Slack bot that bridges Slack messages to Claude Code via the Claude CLI. Users mention the bot or DM it; messages are queued per-thread, sent to Claude, and responses are posted back to Slack.
 
 ## Architecture
 
 ```
-Slack (Socket Mode) → listeners.ts → MessageQueue → agent.ts (Claude SDK) → formatters.ts → Slack
+Slack (Socket Mode) → listeners.ts → MessageQueue → agent.ts (Claude CLI) → formatters.ts → Slack
                                                         ↕
                                                   session-store.ts (SQLite)
 ```
@@ -15,7 +15,7 @@ Slack (Socket Mode) → listeners.ts → MessageQueue → agent.ts (Claude SDK) 
 - **Entry point:** `src/index.ts`
 - **Config:** `src/config.ts` loads from `.env` via dotenv
 - **Slack handling:** `src/slack/listeners.ts` registers `app_mention` and `message` event handlers
-- **Claude integration:** `src/claude/agent.ts` wraps `query()` from the Agent SDK
+- **Claude integration:** `src/claude/agent.ts` spawns the Claude CLI (`claude -p`) as a subprocess
 - **Session storage:** `src/store/session-store.ts` uses better-sqlite3 with WAL mode
 - **Message queue:** `src/queue/message-queue.ts` ensures serial processing per thread
 - **Formatters:** `src/slack/formatters.ts` converts Markdown to Slack mrkdwn and splits long messages
@@ -24,10 +24,10 @@ Slack (Socket Mode) → listeners.ts → MessageQueue → agent.ts (Claude SDK) 
 
 - **Socket Mode** -- no webhooks or public URLs needed
 - **Per-thread queuing** -- `MessageQueue` chains promises per `channelId:threadTs` key to prevent race conditions
-- **Session resumption** -- Claude sessions are stored in SQLite keyed by `(channel_id, thread_ts)` and resumed via the SDK's `resume` option
+- **Session resumption** -- Claude sessions are stored in SQLite keyed by `(channel_id, thread_ts)` and resumed via the CLI's `--resume` flag
 - **Typing indicator** -- posts a "Thinking..." message first, then updates it with the response
 - **Permission gating** -- `ALLOWED_USER_IDS` env var restricts access; empty means open to all
-- **Bypass permissions** -- Claude runs with `permissionMode: 'bypassPermissions'` so it can operate autonomously
+- **Bypass permissions** -- Claude runs with `--dangerously-skip-permissions` so it can operate autonomously
 
 ## Commands
 

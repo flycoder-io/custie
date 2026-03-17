@@ -12,14 +12,17 @@
     <marker id="arrow-purple" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="10" markerHeight="7" orient="auto-start-reverse">
       <polygon points="0 0, 10 3.5, 0 7" fill="#8b5cf6"/>
     </marker>
+    <marker id="arrow-green" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="10" markerHeight="7" orient="auto-start-reverse">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#16a34a"/>
+    </marker>
   </defs>
 
   <!-- Background -->
   <rect width="900" height="520" rx="12" fill="#fafafa"/>
 
   <!-- Title -->
-  <text x="450" y="36" text-anchor="middle" font-size="20" font-weight="700" fill="#1e293b">Joseph Bot Architecture</text>
-  <text x="450" y="56" text-anchor="middle" font-size="13" fill="#94a3b8">Slack ↔ Claude Code Bidirectional Chat</text>
+  <text x="450" y="36" text-anchor="middle" font-size="20" font-weight="700" fill="#1e293b">Custie Architecture</text>
+  <text x="450" y="56" text-anchor="middle" font-size="13" fill="#94a3b8">Slack ↔ Claude CLI Bidirectional Chat</text>
 
   <!-- ==================== -->
   <!-- Slack Cloud -->
@@ -64,10 +67,10 @@
   <rect x="334" y="292" width="132" height="34" rx="6" fill="#fff7ed" stroke="#fdba74" stroke-width="1"/>
   <text x="400" y="314" text-anchor="middle" font-size="11" fill="#9a3412">message-queue.ts</text>
 
-  <!-- claude-agent-sdk -->
+  <!-- Claude CLI (spawn) -->
   <rect x="334" y="340" width="132" height="40" rx="6" fill="#faf5ff" stroke="#8b5cf6" stroke-width="1.5"/>
-  <text x="400" y="356" text-anchor="middle" font-size="11" font-weight="600" fill="#7c3aed">claude-agent-sdk</text>
-  <text x="400" y="370" text-anchor="middle" font-size="10" fill="#64748b">query() / resume</text>
+  <text x="400" y="356" text-anchor="middle" font-size="11" font-weight="600" fill="#7c3aed">agent.ts</text>
+  <text x="400" y="370" text-anchor="middle" font-size="10" fill="#64748b">spawn claude CLI</text>
 
   <!-- session-store.ts -->
   <rect x="500" y="196" width="76" height="130" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1"/>
@@ -81,18 +84,28 @@
   <text x="538" y="404" text-anchor="middle" font-size="9" fill="#94a3b8">custie.db</text>
 
   <!-- ==================== -->
-  <!-- Claude API -->
+  <!-- Claude CLI Process -->
   <!-- ==================== -->
-  <rect x="680" y="200" width="180" height="120" rx="12" fill="#fff" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow)"/>
-  <rect x="680" y="200" width="180" height="36" rx="12" fill="#D97706"/>
-  <rect x="680" y="224" width="180" height="12" fill="#D97706"/>
-  <text x="770" y="223" text-anchor="middle" font-size="13" font-weight="600" fill="#fff">Anthropic API</text>
+  <rect x="680" y="140" width="180" height="240" rx="12" fill="#fff" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="680" y="140" width="180" height="36" rx="12" fill="#D97706"/>
+  <rect x="680" y="164" width="180" height="12" fill="#D97706"/>
+  <text x="770" y="163" text-anchor="middle" font-size="13" font-weight="600" fill="#fff">Claude CLI Process</text>
 
-  <rect x="700" y="250" width="140" height="28" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
-  <text x="770" y="269" text-anchor="middle" font-size="11" fill="#92400e">Claude Opus / Sonnet</text>
+  <!-- CLI features -->
+  <rect x="700" y="190" width="140" height="28" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+  <text x="770" y="209" text-anchor="middle" font-size="11" fill="#92400e">Skills &amp; CLAUDE.md</text>
 
-  <rect x="700" y="284" width="140" height="24" rx="6" fill="#fefce8" stroke="#fde047" stroke-width="1"/>
-  <text x="770" y="300" text-anchor="middle" font-size="10" fill="#a16207">Tools: Read, Edit, Bash...</text>
+  <rect x="700" y="226" width="140" height="28" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+  <text x="770" y="245" text-anchor="middle" font-size="11" fill="#92400e">MCP Servers</text>
+
+  <rect x="700" y="262" width="140" height="28" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+  <text x="770" y="281" text-anchor="middle" font-size="11" fill="#92400e">Tools: Read, Edit, Bash</text>
+
+  <rect x="700" y="298" width="140" height="28" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+  <text x="770" y="317" text-anchor="middle" font-size="11" fill="#92400e">Session Resume</text>
+
+  <rect x="700" y="340" width="140" height="28" rx="6" fill="#fefce8" stroke="#fde047" stroke-width="1"/>
+  <text x="770" y="359" text-anchor="middle" font-size="10" fill="#a16207">→ Anthropic API (HTTPS)</text>
 
   <!-- ==================== -->
   <!-- Connection Lines -->
@@ -112,7 +125,7 @@
   <!-- Listeners → Queue -->
   <line x1="400" y1="278" x2="400" y2="292" stroke="#64748b" stroke-width="1" marker-end="url(#arrow)"/>
 
-  <!-- Queue → Agent SDK -->
+  <!-- Queue → agent.ts -->
   <line x1="400" y1="326" x2="400" y2="340" stroke="#64748b" stroke-width="1" marker-end="url(#arrow)"/>
 
   <!-- Listeners → Session Store -->
@@ -121,10 +134,10 @@
   <!-- Session Store → SQLite -->
   <line x1="538" y1="326" x2="538" y2="370" stroke="#94a3b8" stroke-width="1" marker-end="url(#arrow)"/>
 
-  <!-- Agent SDK → Claude API -->
-  <line x1="466" y1="360" x2="680" y2="260" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arrow-purple)" marker-start="url(#arrow-purple)"/>
-  <rect x="540" y="294" width="72" height="20" rx="4" fill="#faf5ff" stroke="#ddd6fe" stroke-width="1"/>
-  <text x="576" y="308" text-anchor="middle" font-size="9" font-weight="600" fill="#7c3aed">HTTPS</text>
+  <!-- agent.ts → Claude CLI (subprocess spawn) -->
+  <line x1="466" y1="360" x2="680" y2="260" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)" marker-start="url(#arrow-green)"/>
+  <rect x="536" y="294" width="88" height="20" rx="4" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1"/>
+  <text x="580" y="308" text-anchor="middle" font-size="9" font-weight="600" fill="#16a34a">subprocess</text>
 
   <!-- ==================== -->
   <!-- Legend -->
@@ -135,11 +148,11 @@
   <line x1="100" y1="458" x2="130" y2="458" stroke="#3b82f6" stroke-width="2"/>
   <text x="136" y="462" font-size="10" fill="#64748b">WebSocket (persistent, bidirectional)</text>
 
-  <line x1="340" y1="458" x2="370" y2="458" stroke="#8b5cf6" stroke-width="2"/>
-  <text x="376" y="462" font-size="10" fill="#64748b">HTTPS (SDK → API, per query)</text>
+  <line x1="340" y1="458" x2="370" y2="458" stroke="#16a34a" stroke-width="2"/>
+  <text x="376" y="462" font-size="10" fill="#64748b">Subprocess (claude -p, per query)</text>
 
-  <line x1="570" y1="458" x2="600" y2="458" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3"/>
-  <text x="606" y="462" font-size="10" fill="#64748b">Internal (in-process)</text>
+  <line x1="590" y1="458" x2="620" y2="458" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="626" y="462" font-size="10" fill="#64748b">Internal (in-process)</text>
 
   <text x="60" y="486" font-size="10" fill="#94a3b8">No webhook, no tunnel, no public URL needed. All connections are outbound from your Mac.</text>
 </svg>
