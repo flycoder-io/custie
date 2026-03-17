@@ -28,6 +28,15 @@ function run(cmd: string, opts: { silent?: boolean } = {}): string {
     .trim();
 }
 
+function detectClaudeBinDir(): string | undefined {
+  try {
+    const claudePath = execSync('which claude', { encoding: 'utf-8', stdio: 'pipe' }).trim();
+    return claudePath ? dirname(claudePath) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function detectCustieBin(): string {
   // Resolve the actual binary path
   const argv1 = process.argv[1];
@@ -70,10 +79,15 @@ async function installMacOS(): Promise<void> {
 
   const custieBin = detectCustieBin();
   const nodePath = process.execPath;
+  const claudeBinDir = detectClaudeBinDir();
   const logDir = paths.LOG_DIR;
   mkdirSync(logDir, { recursive: true });
 
   const envVars = readEnvFile();
+
+  const pathParts = [dirname(nodePath), claudeBinDir, '/usr/local/bin', '/usr/bin', '/bin'].filter(
+    Boolean,
+  );
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -92,7 +106,7 @@ async function installMacOS(): Promise<void> {
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>${dirname(nodePath)}:/usr/local/bin:/usr/bin:/bin</string>
+    <string>${pathParts.join(':')}</string>
 ${Object.entries(envVars)
   .map(([k, v]) => `    <key>${k}</key>\n    <string>${escapeXml(v)}</string>`)
   .join('\n')}
@@ -141,6 +155,7 @@ async function installLinux(): Promise<void> {
 
   const custieBin = detectCustieBin();
   const nodePath = process.execPath;
+  const claudeBinDir = detectClaudeBinDir();
   const logDir = paths.LOG_DIR;
   mkdirSync(logDir, { recursive: true });
 
@@ -148,6 +163,10 @@ async function installLinux(): Promise<void> {
   const envLines = Object.entries(envVars)
     .map(([k, v]) => `Environment="${k}=${v}"`)
     .join('\n');
+
+  const pathParts = [dirname(nodePath), claudeBinDir, '/usr/local/bin', '/usr/bin', '/bin'].filter(
+    Boolean,
+  );
 
   const unit = `[Unit]
 Description=Custie Slack Bot
@@ -160,7 +179,7 @@ ExecStart=${custieBin} start
 Restart=on-failure
 RestartSec=5
 ${envLines}
-Environment="PATH=${dirname(nodePath)}:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=${pathParts.join(':')}"
 
 StandardOutput=append:${join(logDir, 'custie.log')}
 StandardError=append:${join(logDir, 'custie-error.log')}
