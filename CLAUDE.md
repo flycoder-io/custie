@@ -26,8 +26,8 @@ Slack (Socket Mode) → listeners.ts → MessageQueue → agent.ts (Claude CLI) 
 
 ```bash
 custie start             # Start the Slack bot server
-custie setup             # Interactive first-time setup (manual token entry)
-custie setup --browser   # Automated setup via Playwright browser automation
+custie setup             # Automated setup via Playwright (falls back to manual)
+custie setup --manual    # Manual setup (paste tokens yourself)
 custie install           # Install as system service (launchd on macOS, systemd on Linux)
 custie uninstall         # Remove the system service
 custie prompt            # Edit the system prompt in $EDITOR

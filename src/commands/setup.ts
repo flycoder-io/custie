@@ -158,15 +158,7 @@ async function manualSetup(): Promise<void> {
 // ─── Browser setup (--browser) ──────────────────────────────────────────────
 
 async function browserSetup(): Promise<void> {
-  let chromium;
-  try {
-    const pw = await import('playwright');
-    chromium = pw.chromium;
-  } catch {
-    error('Playwright is not installed. Install it with: pnpm add -D playwright');
-    error('Then run: pnpx playwright install chromium');
-    process.exit(1);
-  }
+  const { chromium } = await import('playwright');
 
   const MANIFEST_PATH = resolve(paths.PACKAGE_ROOT, 'slack-app-manifest.yml');
   if (!existsSync(MANIFEST_PATH)) {
@@ -540,9 +532,21 @@ export async function runSetup(args: string[]): Promise<void> {
   console.log('\n\x1b[1mCustie Setup\x1b[0m\n');
   ensureDirs();
 
-  if (args.includes('--browser')) {
+  if (args.includes('--manual')) {
+    await manualSetup();
+    return;
+  }
+
+  // Default: try browser setup, fallback to manual if Playwright not installed
+  try {
+    await import('playwright');
     await browserSetup();
-  } else {
+  } catch {
+    warn(
+      'Playwright not installed -- falling back to manual setup.\n' +
+        '  For automated browser setup, run:\n' +
+        '  pnpm add -D playwright && pnpx playwright install chromium\n',
+    );
     await manualSetup();
   }
 }

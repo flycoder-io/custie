@@ -60,8 +60,8 @@ custie config --edit
 
 | Command | What it does |
 |---|---|
-| `custie setup` | Interactive first-time setup |
-| `custie setup --browser` | Automated setup via Playwright |
+| `custie setup` | Automated setup via Playwright (falls back to manual) |
+| `custie setup --manual` | Manual setup (paste tokens yourself) |
 | `custie start` | Run the bot (foreground) |
 | `custie install` | Install as background service |
 | `custie uninstall` | Remove background service |
