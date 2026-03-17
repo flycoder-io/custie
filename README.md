@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="custie.png" alt="Custie" width="240" />
+</p>
+
 # Custie
 
 **Claude Code, inside your Slack.** Your team gets an AI that can read your codebase, edit files, run commands, and use every Claude Code skill -- all from a Slack thread.
