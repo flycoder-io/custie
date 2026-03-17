@@ -1,14 +1,9 @@
 import { execSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 
-function getVersion(): string {
-  const require = createRequire(import.meta.url);
-  const pkg = require('../../package.json') as { version: string };
-  return pkg.version;
-}
+declare const __VERSION__: string;
 
 export async function runUpgrade(): Promise<void> {
-  const current = getVersion();
+  const current = __VERSION__;
   console.log(`Current version: ${current}`);
   console.log('Checking for updates...\n');
 
