@@ -9,6 +9,6 @@ export default defineConfig({
   dts: true,
   clean: true,
   banner: { js: '#!/usr/bin/env node' },
-  external: ['playwright', 'better-sqlite3'],
+  external: ['playwright', 'better-sqlite3', '@slack/bolt', '@slack/web-api'],
   define: { __VERSION__: JSON.stringify(version) },
 });
