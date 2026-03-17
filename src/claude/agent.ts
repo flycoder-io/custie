@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { paths } from '../paths';
 
 export interface ClaudeResponse {
   sessionId: string;
@@ -10,9 +11,9 @@ export interface ClaudeResponse {
 const debug = process.env['DEBUG'] === 'true';
 
 function loadSystemPrompt(): string {
-  const root = resolve(import.meta.dirname, '../..');
-  const customPath = resolve(root, 'system.md');
-  const defaultPath = resolve(root, 'system.default.md');
+  // Check user-customized prompt first, then default in package root
+  const customPath = paths.PROMPT_FILE;
+  const defaultPath = resolve(paths.PACKAGE_ROOT, 'system.default.md');
   const filePath = existsSync(customPath) ? customPath : defaultPath;
   return readFileSync(filePath, 'utf-8').trim();
 }

@@ -1,14 +1,15 @@
-import path from 'node:path';
 import { loadConfig } from './config';
+import { paths, ensureDirs } from './paths';
 import { createSlackApp } from './slack/app';
 import { registerListeners } from './slack/listeners';
 import { SessionStore } from './store/session-store';
 
-async function main(): Promise<void> {
+export async function startServer(): Promise<void> {
+  ensureDirs();
+
   const config = loadConfig();
 
-  const dbPath = path.join(import.meta.dirname, '..', 'custie.db');
-  const store = new SessionStore(dbPath);
+  const store = new SessionStore(paths.DB_FILE);
 
   const app = createSlackApp(config);
   registerListeners(app, store, config);
@@ -25,8 +26,3 @@ async function main(): Promise<void> {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 }
-
-main().catch((err) => {
-  console.error('[custie] Fatal error:', err);
-  process.exit(1);
-});

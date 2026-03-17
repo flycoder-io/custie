@@ -1,4 +1,7 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { paths } from './paths';
 
 export interface Config {
   slackBotToken: string;
@@ -10,6 +13,25 @@ export interface Config {
   allowedUserIds: Set<string>;
   maxTurns: number;
   ownerUserId?: string;
+}
+
+/**
+ * Load env files in priority order (first file wins per variable):
+ *   1. ~/.config/custie/config.env
+ *   2. repo .env
+ *   3. env vars already set in the process
+ */
+export function loadEnvFiles(): void {
+  // Load XDG config.env first (override: false means it won't overwrite existing vars)
+  if (existsSync(paths.CONFIG_FILE)) {
+    dotenv.config({ path: paths.CONFIG_FILE, override: false });
+  }
+
+  // Load repo .env second
+  const repoEnv = resolve(process.cwd(), '.env');
+  if (existsSync(repoEnv)) {
+    dotenv.config({ path: repoEnv, override: false });
+  }
 }
 
 function requireEnv(name: string): string {
