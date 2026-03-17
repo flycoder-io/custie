@@ -17,6 +17,10 @@ Claude Code is powerful, but it lives in your terminal. Custie brings the **full
 
 Sessions persist across messages. Start a conversation in a thread, come back hours later, and pick up right where you left off.
 
+<p align="center">
+  <img src="how.png" alt="Custie in action" width="480" />
+</p>
+
 ## How It Works
 
 Custie runs on your machine (or server) and connects to Slack via **Socket Mode** -- no webhooks, no tunnels, no public URLs. When someone mentions the bot, it spawns a real Claude Code process with full access to your project.
