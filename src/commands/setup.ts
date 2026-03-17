@@ -149,7 +149,7 @@ async function manualSetup(): Promise<void> {
     // Copy default prompt if not exists
     copyDefaultPrompt();
 
-    log('Setup complete! Run `custie start` to start the bot.');
+    printNextSteps();
   } finally {
     rl.close();
   }
@@ -434,7 +434,7 @@ async function browserSetup(): Promise<void> {
 
     copyDefaultPrompt();
 
-    log('Setup complete! Run `custie start` to start the bot.');
+    printNextSteps();
 
     if (!DEBUG) {
       await context.close();
@@ -509,6 +509,19 @@ function writeConfigFile(config: ConfigValues): void {
 
   writeFileSync(paths.CONFIG_FILE, envContent);
   success(`Config written to ${paths.CONFIG_FILE}`);
+}
+
+function printNextSteps(): void {
+  log('Setup complete! Next steps:\n');
+  console.log('  1. Set your bot avatar:');
+  console.log('     Go to https://api.slack.com/apps → your app → Basic Information');
+  console.log('     Scroll to "Display Information" and upload an app icon.\n');
+  console.log('  2. Customise the system prompt (optional):');
+  console.log(`     Run \x1b[1mcustie prompt\x1b[0m to edit ${paths.PROMPT_FILE}\n`);
+  console.log('  3. Start the bot:');
+  console.log('     Run \x1b[1mcustie start\x1b[0m\n');
+  console.log('  4. Install as a background service (optional):');
+  console.log('     Run \x1b[1mcustie install\x1b[0m\n');
 }
 
 function copyDefaultPrompt(): void {

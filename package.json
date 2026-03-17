@@ -1,7 +1,8 @@
 {
   "name": "custie",
   "version": "1.0.0",
-  "description": "Slack <> Claude Code bidirectional chat server",
+  "description": "Claude Code, inside your Slack",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

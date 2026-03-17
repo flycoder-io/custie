@@ -1,179 +1,99 @@
 # Custie
 
-A bidirectional chat server that bridges **Slack** and **Claude Code** via the Claude CLI. Mention the bot in a channel or DM it directly to start an AI-powered conversation that persists across messages.
+**Claude Code, inside your Slack.** Your team gets an AI that can read your codebase, edit files, run commands, and use every Claude Code skill -- all from a Slack thread.
 
-![Architecture](architecture.svg)
+## Why Custie?
 
-## Features
+Claude Code is powerful, but it lives in your terminal. Custie brings the **full Claude Code experience** into Slack:
 
-- **Channel mentions** -- `@custie` in any channel starts a threaded conversation
-- **Direct messages** -- DM the bot for private sessions
-- **Persistent sessions** -- conversations resume automatically using SQLite-backed storage
-- **Markdown conversion** -- translates Markdown to Slack's mrkdwn format
-- **Message splitting** -- long responses are split at natural boundaries to respect Slack's limits
-- **Per-thread queue** -- messages within a thread are processed serially to prevent race conditions
-- **Access control** -- restrict usage to specific Slack user IDs (defaults to owner only)
+- **Ask about your codebase** -- `@custie what does the auth middleware do?`
+- **Make changes** -- `@custie add input validation to the signup endpoint`
+- **Run commands** -- `@custie run the test suite and fix any failures`
+- **Use skills & MCP servers** -- everything Claude Code can do, your bot can do
 
-## Prerequisites
+Sessions persist across messages. Start a conversation in a thread, come back hours later, and pick up right where you left off.
 
-- Node.js 18+
-- Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`)
+## How It Works
 
-## Installation
+Custie runs on your machine (or server) and connects to Slack via **Socket Mode** -- no webhooks, no tunnels, no public URLs. When someone mentions the bot, it spawns a real Claude Code process with full access to your project.
 
-### Global install (recommended)
-
-```bash
-npm install -g custie
+```
+@custie in Slack  -->  Custie server  -->  Claude Code CLI  -->  your codebase
 ```
 
-### From source
+## Get Started
 
 ```bash
-git clone <repo-url> && cd custie
-pnpm install
-pnpm run build
+npm install -g @anthropic-ai/claude-code   # prerequisite
+npm install -g custie                       # install custie
+custie setup                                # configure Slack app + tokens
+custie start                                # run the bot
 ```
 
-## Quick Start
+That's it. Go to Slack and `@custie hello`.
 
-### 1. Setup Slack App & config
+> **Want it always running?** Run `custie install` to set up a background service (launchd on macOS, systemd on Linux).
+
+## Customise Your Bot
+
+**System prompt** -- Define your bot's personality and behaviour:
 
 ```bash
-custie setup
+custie prompt    # opens ~/.config/custie/prompt.md in your editor
 ```
 
-This will:
-
-1. Guide you to create a Slack App using the bundled manifest (`slack-app-manifest.yml`)
-2. Prompt you for Slack tokens (Bot Token, App Token, Signing Secret)
-3. Prompt you for bot config (working directory, bot name, owner ID, allowed users)
-4. Write everything to `~/.config/custie/config.env`
-5. Copy the default system prompt to `~/.config/custie/prompt.md`
-
-> **Automated mode:** If you have Playwright installed, run `custie setup --browser` to automate the Slack App creation in a browser — you only need to log in.
-
-### 2. Start the bot
+**Access control** -- By default, only the owner can use the bot (it runs with full filesystem access). Add trusted user IDs to open it up:
 
 ```bash
-custie start
+custie config --edit
 ```
 
-### 3. Install as a system service (optional)
+## CLI Reference
 
-```bash
-custie install
-```
-
-Installs Custie as a background service that starts automatically:
-- **macOS:** LaunchAgent (`launchctl`)
-- **Linux:** systemd user service
-
-To remove:
-
-```bash
-custie uninstall
-```
-
-## CLI Commands
-
-| Command | Description |
+| Command | What it does |
 |---|---|
-| `custie setup` | Interactive first-time setup (Slack App + config) |
-| `custie setup --browser` | Automated setup via Playwright browser automation |
-| `custie start` | Start the bot in foreground |
-| `custie install` | Install as a system service |
-| `custie uninstall` | Remove the system service |
-| `custie prompt` | Edit the system prompt in `$EDITOR` |
-| `custie config` | Show current config (paths, values with masked tokens) |
-| `custie config --edit` | Edit config in `$EDITOR` |
-| `custie config --path` | Print the config file path |
+| `custie setup` | Interactive first-time setup |
+| `custie setup --browser` | Automated setup via Playwright |
+| `custie start` | Run the bot (foreground) |
+| `custie install` | Install as background service |
+| `custie uninstall` | Remove background service |
+| `custie prompt` | Edit system prompt |
+| `custie config` | Show current config |
+| `custie config --edit` | Edit config file |
 
-## Slack App Configuration
+## Configuration
 
-The easiest way is `custie setup`, which guides you through everything. If you prefer manual setup:
+All config lives in `~/.config/custie/`:
 
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From an app manifest**
-2. Paste the contents of `slack-app-manifest.yml`
-3. Generate an App-Level Token with `connections:write` scope
-4. Install to your workspace
-5. Copy the three tokens into `~/.config/custie/config.env`
-
-### Environment Variables
+| File | Purpose |
+|---|---|
+| `config.env` | Slack tokens, working directory, access control |
+| `prompt.md` | System prompt (bot personality & instructions) |
 
 | Variable | Required | Description |
 |---|---|---|
 | `SLACK_BOT_TOKEN` | Yes | Bot User OAuth Token (`xoxb-...`) |
-| `SLACK_APP_TOKEN` | Yes | App-Level Token with `connections:write` (`xapp-...`) |
-| `SLACK_SIGNING_SECRET` | Yes | Found in your Slack app's Basic Information page |
-| `CLAUDE_CWD` | No | Working directory for Claude sessions (defaults to `$HOME`) |
-| `CLAUDE_CONFIG_DIR` | No | Custom Claude config directory |
-| `BOT_NAME` | No | Display name in system prompt (default: `Custie`) |
-| `OWNER_USER_ID` | No | Your Slack user ID for mention monitoring |
-| `ALLOWED_USER_IDS` | No | Comma-separated Slack user IDs (defaults to owner; empty = everyone) |
-
-## File Locations
-
-Custie follows [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/) conventions:
-
-| Path | Contents |
-|---|---|
-| `~/.config/custie/config.env` | Slack tokens and bot configuration |
-| `~/.config/custie/prompt.md` | Customisable system prompt |
-| `~/.local/share/custie/custie.db` | SQLite session database |
-| `~/.local/share/custie/logs/` | Service logs |
-
-## Interacting with the Bot
-
-- **In a channel:** mention `@custie` with your question. Follow-up messages in the thread continue the conversation (no need to re-mention).
-- **In a DM:** just send a message. Every message continues the session for that DM (or thread within the DM).
+| `SLACK_APP_TOKEN` | Yes | App-Level Token (`xapp-...`) |
+| `SLACK_SIGNING_SECRET` | Yes | From Slack app Basic Information |
+| `CLAUDE_CWD` | No | Working directory for Claude |
+| `BOT_NAME` | No | Display name (default: Custie) |
+| `OWNER_USER_ID` | No | Your Slack user ID |
+| `ALLOWED_USER_IDS` | No | Who can use the bot (defaults to owner) |
 
 ## Development
 
 ```bash
-pnpm run dev          # Hot-reload via tsx
-pnpm run build        # Compile to dist/
-pnpm run lint         # oxlint
-pnpm run format       # Prettier
+git clone <repo-url> && cd custie
+pnpm install
+pnpm run dev       # hot-reload
+pnpm run build     # compile
+pnpm run lint      # oxlint
 ```
 
-## Project Structure
+## Architecture
 
-```
-src/
-  cli.ts                   # CLI entry point (command routing)
-  index.ts                 # Server entry (exports startServer)
-  paths.ts                 # XDG-compliant path management
-  config.ts                # Layered env file loading
-  commands/
-    setup.ts               # Interactive Slack App setup + config
-    start.ts               # Start the bot server
-    install.ts             # System service installation
-    uninstall.ts           # System service removal
-    prompt.ts              # Edit system prompt in $EDITOR
-    config.ts              # Show/edit configuration
-    index.ts               # Re-exports
-  slack/
-    app.ts                 # Slack Bolt app factory (Socket Mode)
-    listeners.ts           # Event handlers for mentions, DMs, and threads
-    formatters.ts          # Markdown-to-Slack conversion and message splitting
-  claude/
-    agent.ts               # Claude CLI subprocess integration
-  queue/
-    message-queue.ts       # Per-thread serial message processing
-  store/
-    session-store.ts       # SQLite session persistence (WAL mode)
-```
-
-## Tech Stack
-
-- **TypeScript** with strict mode, ES2022 target
-- **@slack/bolt** -- Slack app framework (Socket Mode)
-- **Claude CLI** -- Claude Code integration (spawned as subprocess)
-- **better-sqlite3** -- session storage with WAL journalling
-- **tsup** -- bundler for ESM output
-- **oxlint** + **Prettier** -- linting and formatting
+![Architecture](architecture.svg)
 
 ## Licence
 
-Private -- all rights reserved.
+MIT
