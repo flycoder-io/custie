@@ -11,6 +11,7 @@
   "files": [
     "dist",
     "system.default.md",
+    "system.capabilities.md",
     "slack-app-manifest.yml"
   ],
   "scripts": {
