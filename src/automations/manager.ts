@@ -1,5 +1,6 @@
-import type { AutomationStore } from '../store/automation-store';
 import {
+  loadAutomations,
+  saveAutomations,
   validateSchedule,
   validateTrigger,
   type AutomationsConfig,
@@ -12,10 +13,7 @@ export type OnChangeCallback = () => void;
 export class AutomationManager {
   private onChange?: OnChangeCallback;
 
-  constructor(
-    private store: AutomationStore,
-    onChange?: OnChangeCallback,
-  ) {
+  constructor(onChange?: OnChangeCallback) {
     this.onChange = onChange;
   }
 
@@ -24,20 +22,19 @@ export class AutomationManager {
   }
 
   list(): AutomationsConfig {
-    return {
-      schedules: this.store.getSchedules(),
-      triggers: this.store.getTriggers(),
-    };
+    return loadAutomations();
   }
 
   addSchedule(schedule: ScheduleAutomation): void {
     const errors = validateSchedule(schedule);
     if (errors.length) throw new Error(`Invalid schedule: ${errors.join(', ')}`);
 
-    if (this.store.getSchedule(schedule.name)) {
+    const config = loadAutomations();
+    if (config.schedules.some((s) => s.name === schedule.name)) {
       throw new Error(`Schedule "${schedule.name}" already exists`);
     }
-    this.store.addSchedule(schedule);
+    config.schedules.push(schedule);
+    saveAutomations(config);
     this.onChange?.();
   }
 
@@ -45,34 +42,59 @@ export class AutomationManager {
     const errors = validateTrigger(trigger);
     if (errors.length) throw new Error(`Invalid trigger: ${errors.join(', ')}`);
 
-    if (this.store.getTrigger(trigger.name)) {
+    const config = loadAutomations();
+    if (config.triggers.some((t) => t.name === trigger.name)) {
       throw new Error(`Trigger "${trigger.name}" already exists`);
     }
-    this.store.addTrigger(trigger);
+    config.triggers.push(trigger);
+    saveAutomations(config);
     this.onChange?.();
   }
 
   remove(name: string): void {
-    const removed = this.store.removeSchedule(name) || this.store.removeTrigger(name);
-    if (!removed) throw new Error(`Automation "${name}" not found`);
+    const config = loadAutomations();
+    const scheduleIdx = config.schedules.findIndex((s) => s.name === name);
+    const triggerIdx = config.triggers.findIndex((t) => t.name === name);
+
+    if (scheduleIdx === -1 && triggerIdx === -1) {
+      throw new Error(`Automation "${name}" not found`);
+    }
+
+    if (scheduleIdx !== -1) config.schedules.splice(scheduleIdx, 1);
+    if (triggerIdx !== -1) config.triggers.splice(triggerIdx, 1);
+    saveAutomations(config);
     this.onChange?.();
   }
 
   enable(name: string): void {
-    if (!this.store.setEnabled(name, true)) {
-      throw new Error(`Automation "${name}" not found`);
-    }
+    const config = loadAutomations();
+    const item = findByName(config, name);
+    if (!item) throw new Error(`Automation "${name}" not found`);
+    item.enabled = true;
+    saveAutomations(config);
     this.onChange?.();
   }
 
   disable(name: string): void {
-    if (!this.store.setEnabled(name, false)) {
-      throw new Error(`Automation "${name}" not found`);
-    }
+    const config = loadAutomations();
+    const item = findByName(config, name);
+    if (!item) throw new Error(`Automation "${name}" not found`);
+    item.enabled = false;
+    saveAutomations(config);
     this.onChange?.();
   }
 
   get(name: string): ScheduleAutomation | TriggerAutomation | undefined {
-    return this.store.getSchedule(name) ?? this.store.getTrigger(name);
+    const config = loadAutomations();
+    return findByName(config, name);
   }
+}
+
+function findByName(
+  config: AutomationsConfig,
+  name: string,
+): ScheduleAutomation | TriggerAutomation | undefined {
+  return (
+    config.schedules.find((s) => s.name === name) ?? config.triggers.find((t) => t.name === name)
+  );
 }

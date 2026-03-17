@@ -1,7 +1,8 @@
+import { watch, type FSWatcher } from 'node:fs';
 import type { App } from '@slack/bolt';
 import type { Config } from '../config';
-import { AutomationStore } from '../store/automation-store';
 import { paths } from '../paths';
+import { loadAutomations } from './config';
 import { runAutomation } from './runner';
 import { AutomationManager } from './manager';
 import { Scheduler } from './scheduler';
@@ -21,17 +22,16 @@ export interface AutomationsHandle {
 }
 
 export function initAutomations(app: App, config: Config): AutomationsHandle {
-  const store = new AutomationStore(paths.DB_FILE);
   const scheduler = new Scheduler();
   const triggerEngine = new TriggerEngine();
+  let watcher: FSWatcher | undefined;
 
   function reload(): void {
-    const schedules = store.getSchedules();
-    const triggers = store.getTriggers();
+    const automations = loadAutomations();
 
     // Re-register all schedules
     scheduler.unregisterAll();
-    for (const schedule of schedules) {
+    for (const schedule of automations.schedules) {
       if (!schedule.enabled) continue;
       scheduler.register(schedule, () =>
         runAutomation({
@@ -47,24 +47,39 @@ export function initAutomations(app: App, config: Config): AutomationsHandle {
     }
 
     // Reload triggers
-    triggerEngine.load(triggers);
+    triggerEngine.load(automations.triggers);
 
-    const scheduleCount = schedules.filter((s) => s.enabled).length;
-    const triggerCount = triggers.filter((t) => t.enabled).length;
+    const scheduleCount = automations.schedules.filter((s) => s.enabled).length;
+    const triggerCount = automations.triggers.filter((t) => t.enabled).length;
     console.log(`[automations] Loaded ${scheduleCount} schedule(s), ${triggerCount} trigger(s)`);
   }
 
-  const manager = new AutomationManager(store, reload);
+  const manager = new AutomationManager(reload);
 
   reload();
+
+  // Watch YAML file for external changes (e.g. git pull, manual edit)
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    watcher = watch(paths.AUTOMATIONS_FILE, () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        console.log('[automations] Config file changed, reloading...');
+        reload();
+      }, 500);
+    });
+  } catch {
+    // File may not exist yet — that's fine, watcher is optional
+  }
 
   return {
     manager,
     scheduler,
     triggerEngine,
     shutdown: () => {
+      watcher?.close();
+      clearTimeout(debounceTimer);
       scheduler.unregisterAll();
-      store.close();
     },
   };
 }

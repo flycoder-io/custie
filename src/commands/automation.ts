@@ -1,7 +1,5 @@
 import { WebClient } from '@slack/web-api';
 import { loadEnvFiles, loadConfig } from '../config';
-import { paths } from '../paths';
-import { AutomationStore } from '../store/automation-store';
 import { AutomationManager } from '../automations/manager';
 import { runAutomation } from '../automations/runner';
 import type { ScheduleAutomation, TriggerAutomation } from '../automations/config';
@@ -35,11 +33,6 @@ const USAGE = `
 function getArg(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
   return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : undefined;
-}
-
-function createManager(): AutomationManager {
-  const store = new AutomationStore(paths.DB_FILE);
-  return new AutomationManager(store);
 }
 
 function printList(manager: AutomationManager): void {
@@ -160,7 +153,7 @@ async function handleRun(manager: AutomationManager, name: string): Promise<void
 
 export async function runAutomationCmd(args: string[]): Promise<void> {
   const subcommand = args[0];
-  const manager = createManager();
+  const manager = new AutomationManager();
 
   switch (subcommand) {
     case 'list':
