@@ -20,6 +20,8 @@ export async function runUpgrade(): Promise<void> {
 
     execSync('npm install -g custie@latest', { stdio: 'inherit' });
     console.log(`\nUpgraded from ${current} to ${latest}.`);
+    console.log('\nReload your shell to use the new version:');
+    console.log('  source ~/.zshrc   # or source ~/.bashrc');
   } catch (err) {
     console.error('Upgrade failed:', (err as Error).message);
     console.error('\nYou can upgrade manually with: npm install -g custie@latest');
