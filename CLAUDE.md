@@ -30,6 +30,7 @@ custie setup             # Guided manual setup (paste tokens yourself)
 custie setup --browser   # Automated setup via Playwright (requires playwright)
 custie install           # Install as system service (launchd on macOS, systemd on Linux)
 custie uninstall         # Remove the system service
+custie upgrade           # Upgrade to the latest version
 custie prompt            # Edit the system prompt in $EDITOR
 custie config            # Show resolved config (paths, loaded values with tokens masked)
 custie config --edit     # Open config.env in $EDITOR

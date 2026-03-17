@@ -4,3 +4,4 @@ export * from './config';
 export * from './setup';
 export * from './install';
 export * from './uninstall';
+export * from './upgrade';

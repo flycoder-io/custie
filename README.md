@@ -50,6 +50,32 @@ That's it. Go to Slack and `@custie hello`.
 
 > **Want it always running?** Run `custie install` to set up a background service (launchd on macOS, systemd on Linux).
 
+## Update
+
+```bash
+custie upgrade
+```
+
+## Uninstall
+
+If you installed Custie as a background service, remove it first:
+
+```bash
+custie uninstall
+```
+
+Then remove the package:
+
+```bash
+npm uninstall -g custie
+```
+
+To also remove config and data:
+
+```bash
+rm -rf ~/.config/custie ~/.local/share/custie
+```
+
 ## Customise Your Bot
 
 **System prompt** -- Define your bot's personality and behaviour:
@@ -76,6 +102,8 @@ custie config --edit
 | `custie prompt` | Edit system prompt |
 | `custie config` | Show current config |
 | `custie config --edit` | Edit config file |
+| `custie upgrade` | Upgrade to latest version |
+| `custie --version` | Show version number |
 
 ## Configuration
 
