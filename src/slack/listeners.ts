@@ -1,7 +1,9 @@
 import type { App } from '@slack/bolt';
 import type { Config } from '../config';
 import type { SessionStore } from '../store/session-store';
+import type { TriggerEngine } from '../automations/triggers';
 import { askClaude } from '../claude/agent';
+import { runAutomation } from '../automations/runner';
 import { MessageQueue } from '../queue/message-queue';
 import { toSlackMarkdown, splitMessage } from './formatters';
 
@@ -10,7 +12,7 @@ const REJECT_MESSAGES = [
   "I appreciate the interest, but I'm exclusively dedicated to my owner. :lock:",
   "Flattered you'd ask, but I'm a one-person bot. :robot_face:",
   "I'm on a strict guest list, and you're not on it — yet! :clipboard:",
-  "My owner keeps me on a short leash. Nothing personal! :dog:",
+  'My owner keeps me on a short leash. Nothing personal! :dog:',
 ];
 
 function getRejectMessage(): string {
@@ -92,7 +94,12 @@ async function isOwnerInSubteam(
   }
 }
 
-export function registerListeners(app: App, store: SessionStore, config: Config): void {
+export function registerListeners(
+  app: App,
+  store: SessionStore,
+  config: Config,
+  triggerEngine?: TriggerEngine,
+): void {
   const { claudeCwd, claudeConfigDir, botName, allowedUserIds, maxTurns, ownerUserId } = config;
   const queue = new MessageQueue();
   let botUserId: string | undefined;
@@ -121,14 +128,23 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     })) as { ts: string };
 
     try {
-      const response = await askClaude(prompt, claudeCwd, botName, maxTurns, claudeConfigDir, sessionId);
+      const response = await askClaude(
+        prompt,
+        claudeCwd,
+        botName,
+        maxTurns,
+        claudeConfigDir,
+        sessionId,
+      );
       store.saveSession(channelId, sessionKey, response.sessionId);
 
       const formatted = toSlackMarkdown(response.text);
       const chunks = splitMessage(formatted);
 
       if (debug) {
-        console.log(`[response] length=${response.text.length} chunks=${chunks.length} chunkSizes=[${chunks.map((c) => c.length).join(',')}]`);
+        console.log(
+          `[response] length=${response.text.length} chunks=${chunks.length} chunkSizes=[${chunks.map((c) => c.length).join(',')}]`,
+        );
       }
 
       // Update the typing message with the first chunk
@@ -174,7 +190,9 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
         resolveUser(client, event.user),
         resolveChannel(client, channelId),
       ]);
-      console.log(`[mention] user=${userName} channel=#${channelName} thread=${threadTs} prompt="${prompt}"`);
+      console.log(
+        `[mention] user=${userName} channel=#${channelName} thread=${threadTs} prompt="${prompt}"`,
+      );
     }
 
     queue.enqueue(threadKey, async () => {
@@ -193,6 +211,23 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
     if (!('text' in event) || !event.text) return;
     if ('bot_id' in event && event.bot_id) return;
     if ('subtype' in event && event.subtype) return;
+
+    // Check event-driven triggers (fire-and-forget, does not block normal handling)
+    if (triggerEngine) {
+      const matched = triggerEngine.match(event.text, event.channel);
+      if (matched) {
+        triggerEngine.recordFired(matched.name);
+        runAutomation({
+          prompt: `Context: A user said "${event.text}" in this channel.\n\n${matched.prompt}`,
+          channel: event.channel,
+          cwd: config.claudeCwd,
+          botName: config.botName,
+          maxTurns: config.maxTurns,
+          claudeConfigDir: config.claudeConfigDir,
+          slackClient: client,
+        }).catch((err) => console.error('[trigger] Error:', err));
+      }
+    }
 
     // React with eyes emoji when someone mentions the owner (directly or via group)
     if (ownerUserId) {
@@ -246,7 +281,15 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
 
       queue.enqueue(threadKey, async () => {
         const session = store.getSession(channelId, sessionKey);
-        await handleMessage(client, say, channelId, sessionKey, prompt, session?.sessionId, threadTs);
+        await handleMessage(
+          client,
+          say,
+          channelId,
+          sessionKey,
+          prompt,
+          session?.sessionId,
+          threadTs,
+        );
       });
       return;
     }
@@ -274,7 +317,9 @@ export function registerListeners(app: App, store: SessionStore, config: Config)
         senderId ? resolveUser(client, senderId) : Promise.resolve('unknown'),
         resolveChannel(client, channelId),
       ]);
-      console.log(`[thread] user=${userName} channel=#${channelName} thread=${threadTs} prompt="${prompt}"`);
+      console.log(
+        `[thread] user=${userName} channel=#${channelName} thread=${threadTs} prompt="${prompt}"`,
+      );
     }
 
     queue.enqueue(threadKey, async () => {

@@ -1,4 +1,13 @@
-import { runStart, runSetup, runInstall, runUninstall, runPrompt, runConfig, runUpgrade } from './commands';
+import {
+  runStart,
+  runSetup,
+  runInstall,
+  runUninstall,
+  runPrompt,
+  runConfig,
+  runUpgrade,
+  runAutomationCmd,
+} from './commands';
 
 const USAGE = `
   Usage: custie <command> [options]
@@ -11,6 +20,7 @@ const USAGE = `
     upgrade      Upgrade custie to the latest version
     prompt       Edit the system prompt in $EDITOR
     config       Show resolved config (--edit to edit, --path for file path)
+    automation   Manage scheduled tasks and triggers
 
   Options:
     -h, --help      Show this help message
@@ -50,6 +60,10 @@ async function main(): Promise<void> {
 
     case 'config':
       await runConfig(args.slice(1));
+      break;
+
+    case 'automation':
+      await runAutomationCmd(args.slice(1));
       break;
 
     case '-v':

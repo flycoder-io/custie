@@ -23,6 +23,9 @@ export const paths = {
   get LOG_DIR() {
     return join(this.DATA_DIR, 'logs');
   },
+  get AUTOMATIONS_FILE() {
+    return join(this.CONFIG_DIR, 'automations.yml');
+  },
 
   PACKAGE_ROOT: resolve(import.meta.dirname, '..'),
 };
