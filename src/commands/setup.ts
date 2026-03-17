@@ -1,7 +1,7 @@
-import { createInterface } from 'node:readline';
 import { existsSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
+import { input, confirm, select, checkbox } from '@inquirer/prompts';
 import { paths, ensureDirs } from '../paths';
 
 // ─── Console helpers ────────────────────────────────────────────────────────
@@ -27,166 +27,288 @@ function mask(token: string): string {
   return token.slice(0, 8) + '...' + token.slice(-4);
 }
 
-// ─── Interactive prompts ────────────────────────────────────────────────────
+// ─── Manifest helper ────────────────────────────────────────────────────────
 
-function createPrompt() {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-
-  function ask(question: string): Promise<string> {
-    return new Promise((resolve) => rl.question(question, resolve));
-  }
-
-  async function promptToken(name: string, prefix: string): Promise<string> {
-    while (true) {
-      const value = (await ask(`  ${name}: `)).trim();
-      if (!value) {
-        warn('Value is required.');
-        continue;
-      }
-      if (!value.startsWith(prefix)) {
-        warn(`Expected value starting with "${prefix}".`);
-        continue;
-      }
-      return value;
-    }
-  }
-
-  async function promptRequired(name: string): Promise<string> {
-    while (true) {
-      const value = (await ask(`  ${name}: `)).trim();
-      if (value) return value;
-      warn('Value is required.');
-    }
-  }
-
-  async function promptOptional(
-    label: string,
-    defaultValue = '',
-  ): Promise<string> {
-    const defaultStr = defaultValue ? ` (default: ${defaultValue})` : ' (leave blank to skip)';
-    const value = (await ask(`  ${label}${defaultStr}: `)).trim();
-    return value || defaultValue;
-  }
-
-  return { rl, ask, promptToken, promptRequired, promptOptional };
+function getManifestYaml(botName: string): string {
+  const manifestPath = resolve(paths.PACKAGE_ROOT, 'slack-app-manifest.yml');
+  const raw = readFileSync(manifestPath, 'utf-8');
+  return raw.replace(/name: Custie/g, `name: ${botName}`);
 }
 
-// ─── Manual setup (default) ─────────────────────────────────────────────────
+// ─── Shared: Step 1 — Personalise ───────────────────────────────────────────
 
-async function manualSetup(): Promise<void> {
-  const { rl, ask, promptToken, promptRequired, promptOptional } = createPrompt();
+interface PersonaliseResult {
+  botName: string;
+  botIconUrl: string;
+  claudeCwd: string;
+}
 
+async function stepPersonalise(): Promise<PersonaliseResult> {
+  log('Step 1: Personalise your bot\n');
+
+  const botName = await input({
+    message: 'Bot name',
+    default: 'Custie',
+  });
+
+  const botIconUrl = await input({
+    message: 'Bot icon URL (leave blank to use bundled mascot)',
+    default: '',
+  });
+
+  const claudeCwd = await input({
+    message: 'Working directory for Claude sessions',
+    default: process.cwd(),
+  });
+
+  return { botName, botIconUrl, claudeCwd };
+}
+
+// ─── Shared: Step 3 — Access control ────────────────────────────────────────
+
+interface AccessControlResult {
+  ownerUserId: string;
+  allowedUserIds: string;
+  claudeConfigDir: string;
+}
+
+interface SlackUser {
+  id: string;
+  name: string;
+  realName: string;
+}
+
+async function fetchSlackUsers(botToken: string): Promise<SlackUser[]> {
+  const res = await fetch('https://slack.com/api/users.list', {
+    headers: { Authorization: `Bearer ${botToken}` },
+  });
+  const data = (await res.json()) as {
+    ok: boolean;
+    members?: Array<{
+      id: string;
+      name: string;
+      real_name?: string;
+      is_bot?: boolean;
+      deleted?: boolean;
+    }>;
+  };
+  if (!data.ok || !data.members) return [];
+  return data.members
+    .filter((m) => !m.is_bot && !m.deleted && m.id !== 'USLACKBOT')
+    .map((m) => ({ id: m.id, name: m.name, realName: m.real_name || m.name }));
+}
+
+async function stepAccessControl(botToken: string): Promise<AccessControlResult> {
+  log('Step 3: Access control\n');
+
+  let users: SlackUser[] = [];
   try {
-    if (existsSync(paths.CONFIG_FILE)) {
-      const answer = await ask(
-        `\n  Config already exists at ${paths.CONFIG_FILE}. Reconfigure? (y/N) `,
-      );
-      if (answer.trim().toLowerCase() !== 'y') {
-        success('Keeping existing config.');
-        return;
-      }
-    }
+    users = await fetchSlackUsers(botToken);
+  } catch {
+    warn('Could not fetch workspace users. Falling back to manual ID entry.');
+  }
 
-    log("Let's configure your Slack app tokens.");
-    console.log(`
-  1. Go to https://api.slack.com/apps and create (or select) your app.
-     Tip: Use the manifest file for quick setup — see slack-app-manifest.yml
-  2. Under "OAuth & Permissions", install the app to your workspace.
-     Copy the \x1b[1mBot User OAuth Token\x1b[0m (starts with xoxb-).
-  3. Under "Basic Information > App-Level Tokens", create a token with
-     the \x1b[1mconnections:write\x1b[0m scope. Copy the token (starts with xapp-).
-  4. Under "Basic Information", copy the \x1b[1mSigning Secret\x1b[0m.
-  `);
+  let ownerUserId = '';
+  let allowedUserIds = '';
 
-    const botToken = await promptToken('SLACK_BOT_TOKEN', 'xoxb-');
-    const appToken = await promptToken('SLACK_APP_TOKEN', 'xapp-');
-    const signingSecret = await promptRequired('SLACK_SIGNING_SECRET');
+  if (users.length > 0) {
+    const userChoices = users.map((u) => ({
+      value: u.id,
+      name: `${u.realName} (@${u.name})`,
+    }));
 
-    log('A few more settings to configure...\n');
-
-    const claudeCwd = await promptOptional(
-      'CLAUDE_CWD -- working directory for Claude sessions',
-      process.cwd(),
-    );
-
-    const claudeConfigDir = await promptOptional(
-      'CLAUDE_CONFIG_DIR -- Claude config directory (e.g. ~/.claude-custie)',
-    );
-
-    const botName = await promptOptional('BOT_NAME -- display name in system prompt', 'Custie');
-
-    console.log(
-      `\n  \x1b[2mTip: Find your Slack user ID by clicking your profile > ... > Copy member ID\x1b[0m`,
-    );
-
-    const ownerUserId = await promptOptional(
-      'OWNER_USER_ID -- your Slack user ID for mention monitoring',
-    );
-
-    const defaultAllowed = ownerUserId || '';
-    const allowedUserIds = await promptOptional(
-      'ALLOWED_USER_IDS -- comma-separated user IDs',
-      defaultAllowed,
-    );
-
-    if (!allowedUserIds) {
-      warn(
-        'No ALLOWED_USER_IDS set -- the bot runs with --dangerously-skip-permissions, so anyone in the workspace can execute commands. Consider restricting access.',
-      );
-    }
-
-    writeConfigFile({
-      botToken,
-      appToken,
-      signingSecret,
-      claudeCwd,
-      claudeConfigDir,
-      botName,
-      ownerUserId,
-      allowedUserIds,
+    ownerUserId = await select({
+      message: 'Who is the bot owner?',
+      choices: [{ value: '', name: '(skip)' }, ...userChoices],
     });
 
-    // Copy default prompt if not exists
-    copyDefaultPrompt();
+    const allowedChoices = userChoices.filter((c) => c.value !== ownerUserId);
+    if (allowedChoices.length > 0) {
+      const selected = await checkbox({
+        message: 'Who else can use the bot? (space to select, enter to confirm)',
+        choices: allowedChoices,
+      });
+      const allIds = ownerUserId ? [ownerUserId, ...selected] : selected;
+      allowedUserIds = allIds.join(',');
+    } else {
+      allowedUserIds = ownerUserId;
+    }
+  } else {
+    console.log(
+      '  \x1b[2mTip: Find your Slack user ID by clicking your profile > ⋯ > Copy member ID\x1b[0m\n',
+    );
 
-    printNextSteps();
-  } finally {
-    rl.close();
+    ownerUserId = await input({
+      message: 'Owner Slack user ID (optional)',
+      default: '',
+    });
+
+    allowedUserIds = await input({
+      message: 'Allowed user IDs, comma-separated (optional)',
+      default: ownerUserId || '',
+    });
   }
+
+  if (!allowedUserIds) {
+    warn(
+      'No allowed users set -- the bot runs with --dangerously-skip-permissions, so anyone in the workspace can execute commands. Consider restricting access.',
+    );
+  }
+
+  const defaultConfigDir = resolve(homedir(), '.claude');
+  const claudeConfigDir = await input({
+    message: 'Claude config directory',
+    default: defaultConfigDir,
+  });
+
+  return { ownerUserId, allowedUserIds, claudeConfigDir };
 }
 
-// ─── Browser setup (--browser) ──────────────────────────────────────────────
+// ─── Guided path: Step 2 — Manual token collection ──────────────────────────
 
-async function browserSetup(): Promise<void> {
+interface TokenResult {
+  botToken: string;
+  appToken: string;
+  signingSecret: string;
+}
+
+async function stepGuidedTokens(botName: string, botIconUrl: string): Promise<TokenResult> {
+  log('Step 2: Create your Slack app\n');
+
+  const manifestYaml = getManifestYaml(botName);
+
+  console.log('  1. Go to https://api.slack.com/apps');
+  console.log('     Click \x1b[1m"Create New App"\x1b[0m → \x1b[1m"From an app manifest"\x1b[0m');
+  console.log('  2. Select your workspace, switch to \x1b[1mYAML\x1b[0m tab, and paste:\n');
+  console.log(`\x1b[2m${manifestYaml}\x1b[0m`);
+  console.log('  3. Click \x1b[1mNext\x1b[0m → \x1b[1mCreate\x1b[0m.');
+  console.log(
+    '  4. Under \x1b[1m"Basic Information"\x1b[0m, scroll to \x1b[1m"Display Information"\x1b[0m.',
+  );
+
+  if (botIconUrl) {
+    console.log(`     Set the icon URL to: ${botIconUrl}`);
+  } else {
+    console.log(
+      '     Upload the bundled \x1b[1mcustie.png\x1b[0m from the package as your app icon.',
+    );
+  }
+
+  console.log(
+    '  5. Under \x1b[1m"Basic Information"\x1b[0m, copy the \x1b[1mSigning Secret\x1b[0m.',
+  );
+  console.log(
+    '  6. Under \x1b[1m"Basic Information > App-Level Tokens"\x1b[0m, generate a token',
+  );
+  console.log('     with the \x1b[1mconnections:write\x1b[0m scope.');
+  console.log(
+    '  7. Under \x1b[1m"OAuth & Permissions"\x1b[0m, install the app and copy the \x1b[1mBot User OAuth Token\x1b[0m.\n',
+  );
+
+  const botToken = await input({
+    message: 'Bot User OAuth Token (xoxb-...)',
+    validate: (val) => val.startsWith('xoxb-') || 'Must start with "xoxb-"',
+  });
+
+  const appToken = await input({
+    message: 'App-Level Token (xapp-...)',
+    validate: (val) => val.startsWith('xapp-') || 'Must start with "xapp-"',
+  });
+
+  const signingSecret = await input({
+    message: 'Signing Secret',
+    validate: (val) => val.trim().length > 0 || 'Value is required',
+  });
+
+  return {
+    botToken: botToken.trim(),
+    appToken: appToken.trim(),
+    signingSecret: signingSecret.trim(),
+  };
+}
+
+// ─── Slack API helpers ───────────────────────────────────────────────────────
+
+async function slackApi(
+  endpoint: string,
+  token: string,
+  cookie: string,
+  params: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  const form = new FormData();
+  form.append('token', token);
+  for (const [key, value] of Object.entries(params)) {
+    form.append(key, value);
+  }
+  const res = await fetch(`https://slack.com/api/${endpoint}`, {
+    method: 'POST',
+    body: form,
+    headers: { Cookie: cookie },
+  });
+  const data = (await res.json()) as Record<string, unknown>;
+  if (!data.ok) {
+    throw new Error(`Slack API ${endpoint} failed: ${(data.error as string) || JSON.stringify(data)}`);
+  }
+  return data;
+}
+
+// ─── Browser path: Step 2 — Hybrid (API + browser) ─────────────────────────
+
+async function stepBrowserTokens(botName: string): Promise<TokenResult> {
+  log('Step 2: Creating Slack app...\n');
+
   const { chromium } = await import('playwright');
 
-  const MANIFEST_PATH = resolve(paths.PACKAGE_ROOT, 'slack-app-manifest.yml');
-  if (!existsSync(MANIFEST_PATH)) {
-    error(`Manifest not found: ${MANIFEST_PATH}`);
-    process.exit(1);
-  }
-  const manifestYaml = readFileSync(MANIFEST_PATH, 'utf-8');
-  success('Manifest loaded from slack-app-manifest.yml');
+  const manifestJson = JSON.stringify(JSON.parse(
+    JSON.stringify({
+      display_information: {
+        name: botName,
+        description: 'Claude Code powered Slack bot',
+        background_color: '#1e293b',
+      },
+      features: {
+        app_home: {
+          home_tab_enabled: false,
+          messages_tab_enabled: true,
+          messages_tab_read_only_enabled: false,
+        },
+        bot_user: { display_name: botName, always_online: true },
+      },
+      oauth_config: {
+        scopes: {
+          bot: [
+            'app_mentions:read', 'chat:write', 'channels:history', 'groups:history',
+            'im:history', 'im:read', 'im:write', 'reactions:write', 'users:read', 'usergroups:read',
+          ],
+        },
+      },
+      settings: {
+        event_subscriptions: { bot_events: ['app_mention', 'message.im'] },
+        interactivity: { is_enabled: false },
+        org_deploy_enabled: false,
+        socket_mode_enabled: true,
+        token_rotation_enabled: false,
+      },
+    }),
+  ));
 
   const DEBUG = process.argv.includes('--debug');
-  const SLOW_MO = DEBUG ? 200 : 50;
   const USER_DATA_DIR = resolve(tmpdir(), 'custie-playwright-profile');
-
-  const { rl, ask, promptOptional } = createPrompt();
 
   let context;
   try {
-    log('Launching browser...');
+    // Phase 1: Launch browser and get xoxc- session token
+    log('Opening browser — a Slack login page will appear.\n');
+    console.log('  If you are already logged in, just sit tight.');
+    console.log('  If not, please log in to your Slack workspace.\n');
+
     context = await chromium.launchPersistentContext(USER_DATA_DIR, {
       headless: false,
-      slowMo: SLOW_MO,
       viewport: { width: 1280, height: 900 },
       args: ['--disable-blink-features=AutomationControlled'],
     });
     const page = context.pages()[0] || (await context.newPage());
 
-    // Phase 1: Auth
-    log('Opening Slack API dashboard...');
     await page.goto('https://api.slack.com/apps');
     const createBtn = page.locator(
       'a:has-text("Create New App"), button:has-text("Create New App")',
@@ -196,247 +318,180 @@ async function browserSetup(): Promise<void> {
       .isVisible({ timeout: 3000 })
       .catch(() => false);
     if (!isLoggedIn) {
-      log('Please log in to Slack in the browser window. Waiting up to 5 minutes...');
+      log('Waiting for you to log in... (up to 5 minutes)');
       await createBtn.first().waitFor({ state: 'visible', timeout: 300_000 });
     }
-    success('Authenticated with Slack.');
+    success('Logged in to Slack.');
 
-    // Phase 2: Create app from manifest
-    log('Creating new Slack App from manifest...');
-    await createBtn.first().click();
-    await page.waitForTimeout(1000);
-    await page
-      .locator(
-        'button:has-text("From an app manifest"), a:has-text("From an app manifest")',
-      )
-      .first()
-      .click();
-    await page.waitForTimeout(1000);
-    const nextBtn = page.locator('button:has-text("Next")');
-    await nextBtn.first().waitFor({ state: 'visible', timeout: 10_000 });
-    await page.waitForTimeout(500);
-    await nextBtn.first().click();
-    await page.waitForTimeout(1500);
+    // Extract xoxc- token by navigating to an app page (triggers authenticated API calls)
+    log('Reading session token — please do not click anything...');
 
-    const yamlTab = page.locator('button:has-text("YAML"), [role="tab"]:has-text("YAML")');
-    if (await yamlTab.first().isVisible({ timeout: 3000 }).catch(() => false)) {
-      await yamlTab.first().click();
-      await page.waitForTimeout(500);
-    }
+    let token = '';
 
-    const textarea = page.locator('textarea').first();
-    const hasTextarea = await textarea.isVisible({ timeout: 2000 }).catch(() => false);
-    if (hasTextarea) {
-      await textarea.click();
-      await page.keyboard.press('Meta+A');
-      await page.keyboard.press('Backspace');
-      await page.waitForTimeout(200);
-      await textarea.fill(manifestYaml);
+    // Click into an existing app to trigger authenticated API calls
+    const appLink = page.locator('a[href*="/apps/A"]').first();
+    const hasExistingApp = await appLink.isVisible({ timeout: 3000 }).catch(() => false);
+
+    if (hasExistingApp) {
+      const tokenPromise = new Promise<string>((resolve) => {
+        page.on('request', (req) => {
+          if (token) return;
+          const postData = req.postData() || '';
+          const match = postData.match(/xoxc-[a-f0-9-]+/);
+          if (match) {
+            token = match[0];
+            resolve(token);
+          }
+        });
+      });
+
+      await appLink.click();
+      token = await Promise.race([
+        tokenPromise,
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error('Timed out waiting for session token')), 15_000),
+        ),
+      ]);
     } else {
-      const editor = page
-        .locator('.CodeMirror, [role="textbox"], [contenteditable="true"]')
-        .first();
-      await editor.click();
-      await page.keyboard.press('Meta+A');
-      await page.keyboard.press('Backspace');
-      await page.waitForTimeout(200);
-      await page.keyboard.insertText(manifestYaml);
-    }
-    await page.waitForTimeout(500);
-    await nextBtn.first().waitFor({ state: 'visible', timeout: 10_000 });
-    await nextBtn.first().click();
-    await page.waitForTimeout(1500);
-    const createAppBtn = page.locator('button:has-text("Create")');
-    await createAppBtn.first().waitFor({ state: 'visible', timeout: 10_000 });
-    await createAppBtn.first().click();
-    await page.waitForURL('**/apps/A*', { timeout: 30_000 });
-    const appUrl = page.url();
-    const appId = appUrl.match(/\/apps\/(A[A-Z0-9]+)/)?.[1];
-    success(`App created! ID: ${appId}`);
-
-    // Phase 3: Signing secret
-    log('Extracting Signing Secret...');
-    await page.waitForSelector('text=Signing Secret', { timeout: 10_000 });
-    const signingSection = page.locator('text=Signing Secret').locator('..');
-    const showBtn = signingSection.locator('button:has-text("Show"), a:has-text("Show")');
-    if (await showBtn.first().isVisible({ timeout: 3000 }).catch(() => false)) {
-      await showBtn.first().click();
-      await page.waitForTimeout(500);
-    }
-    let signingSecret = await signingSection
-      .locator('input')
-      .first()
-      .inputValue()
-      .catch(() => '');
-    if (!signingSecret) {
-      signingSecret = await page.evaluate(() => {
-        const labels = [...document.querySelectorAll('*')].filter(
-          (el) => el.textContent?.trim() === 'Signing Secret',
-        );
-        for (const label of labels) {
-          const container = label.closest('div');
-          if (!container) continue;
-          const input = container.querySelector('input') as HTMLInputElement | null;
-          if (input?.value) return input.value;
+      // No existing apps — extract from script tag after page load
+      token = await page.evaluate(() => {
+        const scripts = document.querySelectorAll('script');
+        for (const s of scripts) {
+          const text = s.textContent || '';
+          const match = text.match(/xoxc-[a-f0-9-]+/);
+          if (match) return match[0];
         }
         return '';
       });
     }
-    if (!signingSecret) {
-      warn('Could not auto-extract Signing Secret. Please copy it from the browser.');
-      signingSecret = await ask('  Paste your Signing Secret here: ');
+
+    if (!token) {
+      throw new Error('Could not find session token. Please try again.');
     }
+
+    // Extract the d cookie (xoxd-) needed to authenticate API calls
+    const cookies = await context.cookies('https://slack.com');
+    const dCookie = cookies.find((c) => c.name === 'd');
+    if (!dCookie) {
+      throw new Error('Could not find session cookie. Please try again.');
+    }
+    const cookieHeader = `d=${dCookie.value}`;
+    success('Session token captured.');
+
+    // Phase 2: Create app via API (automatic — no user action needed)
+    log('Creating Slack app — this is automatic, please wait...');
+    const createResult = await slackApi('apps.manifest.create', token, cookieHeader, { manifest: manifestJson });
+    const credentials = createResult.credentials as {
+      signing_secret: string;
+      client_id: string;
+    };
+    const appId = createResult.app_id as string;
+    const signingSecret = credentials.signing_secret;
+    success(`App created: ${appId}`);
     success(`Signing Secret: ${mask(signingSecret)}`);
 
-    // Phase 4: App-level token
-    log('Generating App-Level Token (Socket Mode)...');
-    const tokenSection = page.locator('text=App-Level Tokens');
-    await tokenSection.first().scrollIntoViewIfNeeded();
-    await page.waitForTimeout(500);
-    const generateBtn = page.locator(
-      'button:has-text("Generate Token"), a:has-text("Generate Token")',
-    );
-    await generateBtn.first().click();
-    await page.waitForTimeout(1000);
-    const nameInput = page.locator(
-      'input[placeholder*="oken"], input[placeholder*="name"], input[name*="token"]',
-    );
-    await nameInput.first().waitFor({ state: 'visible', timeout: 10_000 });
-    await nameInput.first().fill('socket-mode');
-    await page.waitForTimeout(500);
-    const addScopeBtn = page.locator(
-      'button:has-text("Add Scope"), a:has-text("Add Scope")',
-    );
-    await addScopeBtn.first().click();
-    await page.waitForTimeout(500);
-    await page.locator('text=connections:write').first().click();
-    await page.waitForTimeout(500);
-    const genBtn = page.locator('button:has-text("Generate")');
-    await genBtn.first().click();
-    await page.waitForTimeout(2000);
-    let appToken = await page.evaluate(() => {
-      const els = [...document.querySelectorAll('input, code, span, div')];
-      for (const el of els) {
-        const val = (el as HTMLInputElement).value || el.textContent || '';
-        if (val.trim().startsWith('xapp-')) return val.trim();
-      }
-      return '';
+    // Phase 3: Create app-level token via API
+    log('Creating App-Level Token...');
+    const tokenResult = await slackApi('developer.apps.appLevelTokens.create', token, cookieHeader, {
+      app_id: appId,
+      description: `${botName} socket-mode`,
+      scope: 'connections:write',
     });
-    if (!appToken) {
-      warn('Could not auto-extract App-Level Token. Please copy it from the browser.');
-      appToken = await ask('  Paste your App-Level Token (xapp-...): ');
-    }
-    const doneBtn = page.locator('button:has-text("Done")');
-    if (await doneBtn.first().isVisible({ timeout: 2000 }).catch(() => false)) {
-      await doneBtn.first().click();
-      await page.waitForTimeout(500);
-    }
+    const appToken = tokenResult.token as string;
     success(`App-Level Token: ${mask(appToken)}`);
 
-    // Phase 5: Install and get bot token
-    log('Installing app to workspace...');
-    const installLink = page.locator('a:has-text("Install App")');
-    if (await installLink.first().isVisible({ timeout: 3000 }).catch(() => false)) {
-      await installLink.first().click();
-    } else {
-      await page.goto(`https://api.slack.com/apps/${appId}/install-on-team`);
+    // Phase 4: Install to workspace (requires user interaction)
+    const installUrl = `https://api.slack.com/apps/${appId}/install-on-team`;
+    log('Almost done! The browser will now open an install page.\n');
+    console.log('  \x1b[1mPlease click "Install to Workspace", then click "Allow".\x1b[0m\n');
+    await page.goto(installUrl);
+
+    // Install may open a new tab for OAuth — watch all pages for success
+    const installPage = await new Promise<import('playwright').Page>((resolve) => {
+      const checkUrl = (p: import('playwright').Page) => {
+        if (p.url().includes('install-on-team?success=1')) {
+          resolve(p);
+        }
+      };
+
+      // Watch for new tabs
+      context.on('page', (newPage) => {
+        newPage.on('load', () => checkUrl(newPage));
+      });
+
+      // Also watch URL changes on the current page
+      page.on('load', () => checkUrl(page));
+
+      // Check periodically in case we missed the event
+      const interval = setInterval(() => {
+        for (const p of context.pages()) {
+          if (p.url().includes('install-on-team?success=1')) {
+            clearInterval(interval);
+            resolve(p);
+            return;
+          }
+        }
+      }, 1000);
+
+      // Timeout after 2 minutes
+      setTimeout(() => {
+        clearInterval(interval);
+      }, 120_000);
+    });
+
+    success('App installed! Extracting Bot Token...');
+    console.log('\n  You can now return to the terminal — the browser will close shortly.\n');
+
+    // The success page already shows the bot token, or navigate to OAuth page
+    const activePage = installPage;
+    const hasToken = await activePage
+      .locator('text=Bot User OAuth Token')
+      .isVisible({ timeout: 3000 })
+      .catch(() => false);
+    if (!hasToken) {
+      const oauthPageUrl = `https://api.slack.com/apps/${appId}/oauth`;
+      await activePage.goto(oauthPageUrl);
+      await activePage.waitForSelector('text=Bot User OAuth Token', { timeout: 10_000 });
     }
-    await page.waitForTimeout(1500);
-    const installBtn = page.locator(
-      'button:has-text("Install to Workspace"), a:has-text("Install to Workspace")',
-    );
-    await installBtn.first().waitFor({ state: 'visible', timeout: 10_000 });
-    await installBtn.first().click();
-    await page.waitForTimeout(2000);
-    const allowBtn = page.locator('button:has-text("Allow")');
-    if (await allowBtn.first().isVisible({ timeout: 5000 }).catch(() => false)) {
-      await allowBtn.first().click();
-      await page.waitForTimeout(2000);
+    await activePage.waitForTimeout(1000);
+
+    let botToken = '';
+
+    // Try clicking "Show" button first, then extract
+    const showBtn = activePage.locator('button:has-text("Show"), a:has-text("Show")').first();
+    if (await showBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await showBtn.click();
+      await activePage.waitForTimeout(500);
     }
-    await page.waitForSelector('text=Bot User OAuth Token', { timeout: 15_000 });
-    let botToken = await page.evaluate(() => {
+    botToken = await activePage.evaluate(() => {
       const els = [...document.querySelectorAll('input')];
       for (const el of els) {
         if (el.value?.startsWith('xoxb-')) return el.value;
       }
       return '';
     });
+
     if (!botToken) {
-      const showBotBtn = page
-        .locator('button:has-text("Show"), a:has-text("Show")')
-        .first();
-      if (await showBotBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await showBotBtn.click();
-        await page.waitForTimeout(500);
-        botToken = await page.evaluate(() => {
-          const els = [...document.querySelectorAll('input')];
-          for (const el of els) {
-            if (el.value?.startsWith('xoxb-')) return el.value;
-          }
-          return '';
-        });
-      }
-    }
-    if (!botToken) {
-      warn('Could not auto-extract Bot Token. Please copy it from the browser.');
-      botToken = await ask('  Paste your Bot User OAuth Token (xoxb-...): ');
+      warn('Could not auto-extract Bot Token.');
+      botToken = await input({
+        message: 'Paste your Bot User OAuth Token (xoxb-...)',
+        validate: (val) => val.startsWith('xoxb-') || 'Must start with "xoxb-"',
+      });
     }
     success(`Bot Token: ${mask(botToken)}`);
 
-    // Phase 6: Additional config and write
-    log('A few more settings to configure...\n');
-    const claudeCwd = await promptOptional(
-      'CLAUDE_CWD -- working directory for Claude sessions',
-      process.cwd(),
-    );
-    const claudeConfigDir = await promptOptional(
-      'CLAUDE_CONFIG_DIR -- Claude config directory (e.g. ~/.claude-custie)',
-    );
-    const botName = await promptOptional(
-      'BOT_NAME -- display name in system prompt',
-      'Custie',
-    );
-    console.log(
-      `\n  \x1b[2mTip: Find your Slack user ID by clicking your profile > ... > Copy member ID\x1b[0m`,
-    );
-    const ownerUserId = await promptOptional(
-      'OWNER_USER_ID -- your Slack user ID for mention monitoring',
-    );
-    const defaultAllowed = ownerUserId || '';
-    const allowedUserIds = await promptOptional(
-      'ALLOWED_USER_IDS -- comma-separated user IDs',
-      defaultAllowed,
-    );
-    if (!allowedUserIds) {
-      warn(
-        'No ALLOWED_USER_IDS set -- the bot runs with --dangerously-skip-permissions, so anyone in the workspace can execute commands. Consider restricting access.',
-      );
+    if (!DEBUG) {
+      await context.close();
     }
 
-    writeConfigFile({
+    return {
       botToken: botToken.trim(),
       appToken: appToken.trim(),
       signingSecret: signingSecret.trim(),
-      claudeCwd,
-      claudeConfigDir,
-      botName,
-      ownerUserId,
-      allowedUserIds,
-    });
-
-    copyDefaultPrompt();
-
-    printNextSteps();
-
-    if (!DEBUG) {
-      await context.close();
-    } else {
-      log('Debug mode: browser stays open. Press Ctrl+C to exit.');
-      await new Promise(() => {}); // Keep alive
-    }
+    };
   } catch (err) {
-    error(`Setup failed: ${(err as Error).message}`);
-    if (process.argv.includes('--debug')) console.error(err);
+    error(`Browser setup failed: ${(err as Error).message}`);
+    if (DEBUG) console.error(err);
 
     try {
       const pages = context?.pages();
@@ -449,10 +504,8 @@ async function browserSetup(): Promise<void> {
       // ignore screenshot errors
     }
 
-    warn('Browser left open for manual inspection. Press Ctrl+C to exit.');
-    await new Promise(() => {}); // Keep alive
-  } finally {
-    rl.close();
+    warn('Falling back to guided setup.\n');
+    throw err;
   }
 }
 
@@ -465,6 +518,7 @@ interface ConfigValues {
   claudeCwd: string;
   claudeConfigDir: string;
   botName: string;
+  botIconUrl: string;
   ownerUserId: string;
   allowedUserIds: string;
 }
@@ -489,6 +543,9 @@ function writeConfigFile(config: ConfigValues): void {
     `# Bot display name used in system prompt (default: Custie)`,
     `BOT_NAME=${config.botName}`,
     ``,
+    `# Bot icon URL (informational -- set manually in Slack app Display Information)`,
+    `BOT_ICON_URL=${config.botIconUrl}`,
+    ``,
     `# Comma-separated Slack user IDs allowed to interact (empty = everyone)`,
     `# If set, the owner is automatically included -- no need to duplicate`,
     `ALLOWED_USER_IDS=${config.allowedUserIds}`,
@@ -505,22 +562,20 @@ function writeConfigFile(config: ConfigValues): void {
 
 function printNextSteps(): void {
   log('Setup complete! Next steps:\n');
-  console.log('  1. Set your bot avatar:');
-  console.log('     Go to https://api.slack.com/apps → your app → Basic Information');
-  console.log('     Scroll to "Display Information" and upload an app icon.\n');
-  console.log('  2. Customise the system prompt (optional):');
+  console.log('  1. Customise the system prompt (optional):');
   console.log(`     Run \x1b[1mcustie prompt\x1b[0m to edit ${paths.PROMPT_FILE}\n`);
-  console.log('  3. Start the bot:');
+  console.log('  2. Start the bot:');
   console.log('     Run \x1b[1mcustie start\x1b[0m\n');
-  console.log('  4. Install as a background service (optional):');
+  console.log('  3. Install as a background service (optional):');
   console.log('     Run \x1b[1mcustie install\x1b[0m\n');
 }
 
-function copyDefaultPrompt(): void {
+function copyDefaultPrompt(botName: string): void {
   if (!existsSync(paths.PROMPT_FILE)) {
     const defaultPrompt = resolve(paths.PACKAGE_ROOT, 'system.default.md');
     if (existsSync(defaultPrompt)) {
-      copyFileSync(defaultPrompt, paths.PROMPT_FILE);
+      const content = readFileSync(defaultPrompt, 'utf-8').replace(/\{\{botName\}\}/g, botName);
+      writeFileSync(paths.PROMPT_FILE, content);
       success(`Default prompt copied to ${paths.PROMPT_FILE}`);
     }
   }
@@ -532,21 +587,85 @@ export async function runSetup(args: string[]): Promise<void> {
   console.log('\n\x1b[1mCustie Setup\x1b[0m\n');
   ensureDirs();
 
-  if (args.includes('--browser')) {
+  try {
+    // Reconfigure check
+    if (existsSync(paths.CONFIG_FILE)) {
+      const reconfigure = await confirm({
+        message: `Config already exists at ${paths.CONFIG_FILE}. Reconfigure?`,
+        default: false,
+      });
+      if (!reconfigure) {
+        success('Keeping existing config.');
+        return;
+      }
+    }
+
+    // Step 1: Personalise (shared)
+    const { botName, botIconUrl, claudeCwd } = await stepPersonalise();
+
+    // Step 2: Choose path and collect tokens
+    let hasPlaywright = false;
     try {
       await import('playwright');
-      await browserSetup();
+      hasPlaywright = true;
     } catch {
-      warn(
-        'Playwright not installed -- falling back to guided setup.\n' +
-          '  For automated browser setup, run:\n' +
-          '  pnpm add -D playwright && pnpx playwright install chromium\n',
-      );
-      await manualSetup();
+      // Playwright not installed
     }
-    return;
-  }
 
-  // Default: guided manual setup
-  await manualSetup();
+    type SetupMode = 'guided' | 'browser';
+    let mode: SetupMode = 'guided';
+
+    if (hasPlaywright) {
+      mode = await select({
+        message: 'How would you like to create the Slack app?',
+        choices: [
+          {
+            value: 'browser' as SetupMode,
+            name: 'Automate with browser — Playwright creates the app and extracts tokens',
+          },
+          {
+            value: 'guided' as SetupMode,
+            name: 'Guide me step by step — follow instructions and paste tokens',
+          },
+        ],
+      });
+    }
+
+    let tokens: TokenResult;
+
+    if (mode === 'browser') {
+      try {
+        tokens = await stepBrowserTokens(botName);
+      } catch {
+        // Browser failed, fall back to guided
+        tokens = await stepGuidedTokens(botName, botIconUrl);
+      }
+    } else {
+      tokens = await stepGuidedTokens(botName, botIconUrl);
+    }
+
+    // Step 3: Access control (shared)
+    const { ownerUserId, allowedUserIds, claudeConfigDir } = await stepAccessControl(tokens.botToken);
+
+    // Write config
+    writeConfigFile({
+      ...tokens,
+      claudeCwd,
+      claudeConfigDir,
+      botName,
+      botIconUrl,
+      ownerUserId,
+      allowedUserIds,
+    });
+
+    copyDefaultPrompt(botName);
+    printNextSteps();
+  } catch (err) {
+    if ((err as Error).name === 'ExitPromptError') {
+      console.log('\n');
+      warn('Setup cancelled.');
+      return;
+    }
+    throw err;
+  }
 }
