@@ -20,7 +20,8 @@
     "start": "node dist/cli.js start",
     "lint": "oxlint src/",
     "format": "prettier --write src/",
-    "format:check": "prettier --check src/"
+    "format:check": "prettier --check src/",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.3.2",
