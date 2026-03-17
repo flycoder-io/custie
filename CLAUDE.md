@@ -12,13 +12,39 @@ Slack (Socket Mode) → listeners.ts → MessageQueue → agent.ts (Claude CLI) 
                                                   session-store.ts (SQLite)
 ```
 
-- **Entry point:** `src/index.ts`
-- **Config:** `src/config.ts` loads from `.env` via dotenv
+- **CLI entry:** `src/cli.ts` — parses commands and delegates to `src/commands/`
+- **Server entry:** `src/index.ts` — exports `startServer()` for the `start` command
+- **Paths:** `src/paths.ts` — XDG-compliant path management (`~/.config/custie/`, `~/.local/share/custie/`)
+- **Config:** `src/config.ts` — loads env files (XDG config.env → repo .env → process env)
 - **Slack handling:** `src/slack/listeners.ts` registers `app_mention` and `message` event handlers
 - **Claude integration:** `src/claude/agent.ts` spawns the Claude CLI (`claude -p`) as a subprocess
 - **Session storage:** `src/store/session-store.ts` uses better-sqlite3 with WAL mode
 - **Message queue:** `src/queue/message-queue.ts` ensures serial processing per thread
 - **Formatters:** `src/slack/formatters.ts` converts Markdown to Slack mrkdwn and splits long messages
+
+## CLI Commands
+
+```bash
+custie start             # Start the Slack bot server
+custie setup             # Interactive first-time setup (manual token entry)
+custie setup --browser   # Automated setup via Playwright browser automation
+custie install           # Install as system service (launchd on macOS, systemd on Linux)
+custie uninstall         # Remove the system service
+custie prompt            # Edit the system prompt in $EDITOR
+custie config            # Show resolved config (paths, loaded values with tokens masked)
+custie config --edit     # Open config.env in $EDITOR
+custie config --path     # Print the config file path
+```
+
+## Development Commands
+
+```bash
+pnpm run dev             # Hot-reload development server (tsx)
+pnpm run build           # Compile to dist/ (tsup, ESM)
+pnpm start               # Run compiled CLI (custie start)
+pnpm run lint            # oxlint
+pnpm run format          # Prettier
+```
 
 ## Key Patterns
 
@@ -28,17 +54,7 @@ Slack (Socket Mode) → listeners.ts → MessageQueue → agent.ts (Claude CLI) 
 - **Typing indicator** -- posts a "Thinking..." message first, then updates it with the response
 - **Permission gating** -- `ALLOWED_USER_IDS` env var restricts access; empty means open to all
 - **Bypass permissions** -- Claude runs with `--dangerously-skip-permissions` so it can operate autonomously
-
-## Commands
-
-```bash
-npm run dev          # Hot-reload development server (tsx watch)
-npm run build        # Compile to dist/ (tsup, ESM)
-npm start            # Run compiled server
-npm run lint         # oxlint
-npm run format       # Prettier
-npm run setup        # Interactive first-time setup
-```
+- **XDG paths** -- config in `~/.config/custie/`, data in `~/.local/share/custie/`
 
 ## Code Style
 
@@ -51,11 +67,18 @@ npm run setup        # Interactive first-time setup
 ## Environment Variables
 
 Required: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_SIGNING_SECRET`
-Optional: `CLAUDE_CWD` (working directory for Claude), `ALLOWED_USER_IDS` (comma-separated)
+Optional: `CLAUDE_CWD` (working directory for Claude), `ALLOWED_USER_IDS` (comma-separated), `OWNER_USER_ID`, `BOT_NAME`, `CLAUDE_CONFIG_DIR`, `MAX_TURNS`
+
+## File Locations
+
+- **Config file:** `~/.config/custie/config.env` (primary) or repo `.env` (fallback)
+- **System prompt:** `~/.config/custie/prompt.md` (user-customized) or `system.default.md` (package default)
+- **Database:** `~/.local/share/custie/custie.db`
+- **Logs:** `~/.local/share/custie/logs/`
 
 ## Database
 
-SQLite file `custie.db` at project root. Single `sessions` table with composite PK `(channel_id, thread_ts)`. WAL journal mode for concurrent reads.
+SQLite file at `~/.local/share/custie/custie.db`. Single `sessions` table with composite PK `(channel_id, thread_ts)`. WAL journal mode for concurrent reads.
 
 ## Important Notes
 
