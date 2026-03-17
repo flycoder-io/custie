@@ -1,10 +1,11 @@
+# Custie
+
+**Claude Code, inside your Slack.** Your team gets an AI that can read your codebase, edit files, run commands, and use every Claude Code skill -- all from a Slack thread.
+
 <p align="center">
   <img src="custie.png" alt="Custie" width="240" />
 </p>
 
-# Custie
-
-**Claude Code, inside your Slack.** Your team gets an AI that can read your codebase, edit files, run commands, and use every Claude Code skill -- all from a Slack thread.
 
 ## Why Custie?
 
@@ -25,15 +26,22 @@ Sessions persist across messages. Start a conversation in a thread, come back ho
 
 Custie runs on your machine (or server) and connects to Slack via **Socket Mode** -- no webhooks, no tunnels, no public URLs. When someone mentions the bot, it spawns a real Claude Code process with full access to your project.
 
-```
-@custie in Slack  -->  Custie server  -->  Claude Code CLI  -->  your codebase
-```
+<p align="center">
+  <img src="flow.svg" alt="@custie in Slack → Custie Server → Claude Code CLI → Your Codebase" width="720" />
+</p>
 
 ## Get Started
 
+First, install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) if you haven't already:
+
 ```bash
-npm install -g @anthropic-ai/claude-code   # prerequisite
-npm install -g custie                       # install custie
+npm install -g @anthropic-ai/claude-code
+```
+
+Then install and run Custie:
+
+```bash
+npm install -g custie
 custie setup                                # configure Slack app + tokens
 custie start                                # run the bot
 ```
@@ -60,8 +68,8 @@ custie config --edit
 
 | Command | What it does |
 |---|---|
-| `custie setup` | Automated setup via Playwright (falls back to manual) |
-| `custie setup --manual` | Manual setup (paste tokens yourself) |
+| `custie setup` | Guided setup (paste tokens yourself) |
+| `custie setup --browser` | Automated setup via Playwright (requires playwright) |
 | `custie start` | Run the bot (foreground) |
 | `custie install` | Install as background service |
 | `custie uninstall` | Remove background service |
