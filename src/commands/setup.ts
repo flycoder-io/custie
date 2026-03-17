@@ -532,21 +532,21 @@ export async function runSetup(args: string[]): Promise<void> {
   console.log('\n\x1b[1mCustie Setup\x1b[0m\n');
   ensureDirs();
 
-  if (args.includes('--manual')) {
-    await manualSetup();
+  if (args.includes('--browser')) {
+    try {
+      await import('playwright');
+      await browserSetup();
+    } catch {
+      warn(
+        'Playwright not installed -- falling back to guided setup.\n' +
+          '  For automated browser setup, run:\n' +
+          '  pnpm add -D playwright && pnpx playwright install chromium\n',
+      );
+      await manualSetup();
+    }
     return;
   }
 
-  // Default: try browser setup, fallback to manual if Playwright not installed
-  try {
-    await import('playwright');
-    await browserSetup();
-  } catch {
-    warn(
-      'Playwright not installed -- falling back to manual setup.\n' +
-        '  For automated browser setup, run:\n' +
-        '  pnpm add -D playwright && pnpx playwright install chromium\n',
-    );
-    await manualSetup();
-  }
+  // Default: guided manual setup
+  await manualSetup();
 }
