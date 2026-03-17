@@ -40,7 +40,7 @@ export function loadConfig(): Config {
     claudeConfigDir: process.env['CLAUDE_CONFIG_DIR'] || undefined,
     botName: process.env['BOT_NAME'] ?? 'Custie',
     allowedUserIds,
-    maxTurns: parseInt(process.env['MAX_TURNS'] ?? '3', 10),
+    maxTurns: parseInt(process.env['MAX_TURNS'] ?? '10', 10),
     ownerUserId,
   };
 }

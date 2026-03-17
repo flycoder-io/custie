@@ -1,6 +1,6 @@
 # Custie
 
-A bidirectional chat server that bridges **Slack** and **Claude Code** via the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk). Mention the bot in a channel or DM it directly to start an AI-powered conversation that persists across messages.
+A bidirectional chat server that bridges **Slack** and **Claude Code** via the Claude CLI. Mention the bot in a channel or DM it directly to start an AI-powered conversation that persists across messages.
 
 ![Architecture](architecture.svg)
 
@@ -105,7 +105,7 @@ src/
     listeners.ts           # Event handlers for mentions, DMs, and threads
     formatters.ts          # Markdown-to-Slack conversion and message splitting
   claude/
-    agent.ts               # Claude Agent SDK integration and session management
+    agent.ts               # Claude CLI subprocess integration and session management
   queue/
     message-queue.ts       # Per-thread serial message processing
   store/
@@ -118,7 +118,7 @@ scripts/
 
 - **TypeScript** with strict mode, ES2022 target
 - **@slack/bolt** -- Slack app framework (Socket Mode)
-- **@anthropic-ai/claude-agent-sdk** -- Claude Code integration
+- **Claude CLI** -- Claude Code integration (spawned as subprocess)
 - **better-sqlite3** -- session storage with WAL journaling
 - **tsup** -- bundler for ESM output
 - **oxlint** + **Prettier** -- linting and formatting
