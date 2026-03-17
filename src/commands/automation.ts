@@ -1,17 +1,10 @@
 import { WebClient } from '@slack/web-api';
 import { loadEnvFiles, loadConfig } from '../config';
-import {
-  listAutomations,
-  addSchedule,
-  addTrigger,
-  removeAutomation,
-  enableAutomation,
-  disableAutomation,
-  getAutomation,
-  runAutomation,
-  type ScheduleAutomation,
-  type TriggerAutomation,
-} from '../automations';
+import { paths } from '../paths';
+import { AutomationStore } from '../store/automation-store';
+import { AutomationManager } from '../automations/manager';
+import { runAutomation } from '../automations/runner';
+import type { ScheduleAutomation, TriggerAutomation } from '../automations/config';
 
 const USAGE = `
   Usage: custie automation <subcommand> [options]
@@ -22,7 +15,7 @@ const USAGE = `
     remove <name>                   Remove an automation
     enable <name>                   Enable an automation
     disable <name>                  Disable an automation
-    run <name>                      Manually run an automation
+    run <name>                      Manually run a schedule
 
   Add schedule options:
     --name <name>                   Name of the schedule
@@ -44,8 +37,13 @@ function getArg(args: string[], flag: string): string | undefined {
   return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : undefined;
 }
 
-function printList(): void {
-  const config = listAutomations();
+function createManager(): AutomationManager {
+  const store = new AutomationStore(paths.DB_FILE);
+  return new AutomationManager(store);
+}
+
+function printList(manager: AutomationManager): void {
+  const config = manager.list();
 
   if (!config.schedules.length && !config.triggers.length) {
     console.log('No automations configured.');
@@ -71,7 +69,7 @@ function printList(): void {
   console.log();
 }
 
-function handleAdd(args: string[]): void {
+function handleAdd(manager: AutomationManager, args: string[]): void {
   const type = getArg(args, '--type');
   const name = getArg(args, '--name');
 
@@ -100,7 +98,7 @@ function handleAdd(args: string[]): void {
       cwd,
       created_at: new Date().toISOString(),
     };
-    addSchedule(schedule);
+    manager.addSchedule(schedule);
     console.log(`Schedule "${name}" added.`);
   } else if (type === 'trigger') {
     const patternsRaw = getArg(args, '--patterns');
@@ -123,7 +121,7 @@ function handleAdd(args: string[]): void {
       prompt,
       created_at: new Date().toISOString(),
     };
-    addTrigger(trigger);
+    manager.addTrigger(trigger);
     console.log(`Trigger "${name}" added.`);
   } else {
     console.error('--type must be "schedule" or "trigger"');
@@ -131,8 +129,8 @@ function handleAdd(args: string[]): void {
   }
 }
 
-async function handleRun(name: string): Promise<void> {
-  const automation = getAutomation(name);
+async function handleRun(manager: AutomationManager, name: string): Promise<void> {
+  const automation = manager.get(name);
   if (!automation) {
     console.error(`Automation "${name}" not found.`);
     process.exit(1);
@@ -162,14 +160,15 @@ async function handleRun(name: string): Promise<void> {
 
 export async function runAutomationCmd(args: string[]): Promise<void> {
   const subcommand = args[0];
+  const manager = createManager();
 
   switch (subcommand) {
     case 'list':
-      printList();
+      printList(manager);
       break;
 
     case 'add':
-      handleAdd(args.slice(1));
+      handleAdd(manager, args.slice(1));
       break;
 
     case 'remove':
@@ -177,7 +176,7 @@ export async function runAutomationCmd(args: string[]): Promise<void> {
         console.error('Usage: custie automation remove <name>');
         process.exit(1);
       }
-      removeAutomation(args[1]);
+      manager.remove(args[1]);
       console.log(`Automation "${args[1]}" removed.`);
       break;
 
@@ -186,7 +185,7 @@ export async function runAutomationCmd(args: string[]): Promise<void> {
         console.error('Usage: custie automation enable <name>');
         process.exit(1);
       }
-      enableAutomation(args[1]);
+      manager.enable(args[1]);
       console.log(`Automation "${args[1]}" enabled.`);
       break;
 
@@ -195,7 +194,7 @@ export async function runAutomationCmd(args: string[]): Promise<void> {
         console.error('Usage: custie automation disable <name>');
         process.exit(1);
       }
-      disableAutomation(args[1]);
+      manager.disable(args[1]);
       console.log(`Automation "${args[1]}" disabled.`);
       break;
 
@@ -204,7 +203,7 @@ export async function runAutomationCmd(args: string[]): Promise<void> {
         console.error('Usage: custie automation run <name>');
         process.exit(1);
       }
-      await handleRun(args[1]);
+      await handleRun(manager, args[1]);
       break;
 
     default:

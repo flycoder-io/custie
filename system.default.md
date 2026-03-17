@@ -18,4 +18,4 @@ You can manage scheduled automations and event-driven triggers. When users ask t
 
 Schedules run on cron expressions (e.g., "*/15 * * * *" for every 15 minutes, "50 9 * * 1-5" for weekdays at 9:50).
 Triggers fire when messages match patterns in channels the bot is in, with configurable cooldown to avoid spam.
-Config is stored in ~/.config/custie/automations.yml. Changes take effect after server restart or reload.
+Automations are stored in SQLite (same database as sessions). Changes take effect immediately — no restart needed.

@@ -1,7 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import yaml from 'js-yaml';
 import cron from 'node-cron';
-import { paths } from '../paths';
 
 export interface ScheduleAutomation {
   name: string;
@@ -29,28 +26,6 @@ export interface TriggerAutomation {
 export interface AutomationsConfig {
   schedules: ScheduleAutomation[];
   triggers: TriggerAutomation[];
-}
-
-const EMPTY_CONFIG: AutomationsConfig = { schedules: [], triggers: [] };
-
-export function loadAutomations(): AutomationsConfig {
-  const filePath = paths.AUTOMATIONS_FILE;
-  if (!existsSync(filePath)) return { ...EMPTY_CONFIG };
-
-  const raw = readFileSync(filePath, 'utf-8');
-  if (!raw.trim()) return { ...EMPTY_CONFIG };
-
-  const parsed = yaml.load(raw) as Partial<AutomationsConfig> | null;
-  return {
-    schedules: parsed?.schedules ?? [],
-    triggers: parsed?.triggers ?? [],
-  };
-}
-
-export function saveAutomations(config: AutomationsConfig): void {
-  const filePath = paths.AUTOMATIONS_FILE;
-  const content = yaml.dump(config, { lineWidth: 120, noRefs: true });
-  writeFileSync(filePath, content, 'utf-8');
 }
 
 export function validateSchedule(s: ScheduleAutomation): string[] {

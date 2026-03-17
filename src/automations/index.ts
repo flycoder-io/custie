@@ -1,7 +1,9 @@
 import type { App } from '@slack/bolt';
 import type { Config } from '../config';
-import { loadAutomations } from './config';
+import { AutomationStore } from '../store/automation-store';
+import { paths } from '../paths';
 import { runAutomation } from './runner';
+import { AutomationManager } from './manager';
 import { Scheduler } from './scheduler';
 import { TriggerEngine } from './triggers';
 
@@ -12,22 +14,24 @@ export * from './scheduler';
 export * from './triggers';
 
 export interface AutomationsHandle {
+  manager: AutomationManager;
   scheduler: Scheduler;
   triggerEngine: TriggerEngine;
   shutdown: () => void;
-  reload: () => void;
 }
 
 export function initAutomations(app: App, config: Config): AutomationsHandle {
+  const store = new AutomationStore(paths.DB_FILE);
   const scheduler = new Scheduler();
   const triggerEngine = new TriggerEngine();
 
-  function loadAndRegister(): void {
-    const automations = loadAutomations();
+  function reload(): void {
+    const schedules = store.getSchedules();
+    const triggers = store.getTriggers();
 
-    // Register schedules
+    // Re-register all schedules
     scheduler.unregisterAll();
-    for (const schedule of automations.schedules) {
+    for (const schedule of schedules) {
       if (!schedule.enabled) continue;
       scheduler.register(schedule, () =>
         runAutomation({
@@ -42,20 +46,25 @@ export function initAutomations(app: App, config: Config): AutomationsHandle {
       );
     }
 
-    // Load triggers
-    triggerEngine.load(automations.triggers);
+    // Reload triggers
+    triggerEngine.load(triggers);
 
-    const scheduleCount = automations.schedules.filter((s) => s.enabled).length;
-    const triggerCount = automations.triggers.filter((t) => t.enabled).length;
+    const scheduleCount = schedules.filter((s) => s.enabled).length;
+    const triggerCount = triggers.filter((t) => t.enabled).length;
     console.log(`[automations] Loaded ${scheduleCount} schedule(s), ${triggerCount} trigger(s)`);
   }
 
-  loadAndRegister();
+  const manager = new AutomationManager(store, reload);
+
+  reload();
 
   return {
+    manager,
     scheduler,
     triggerEngine,
-    shutdown: () => scheduler.unregisterAll(),
-    reload: loadAndRegister,
+    shutdown: () => {
+      scheduler.unregisterAll();
+      store.close();
+    },
   };
 }
