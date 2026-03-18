@@ -85,9 +85,18 @@ async function installMacOS(): Promise<void> {
 
   const envVars = readEnvFile();
 
-  const pathParts = [dirname(nodePath), claudeBinDir, '/usr/local/bin', '/usr/bin', '/bin'].filter(
-    Boolean,
-  );
+  const homebrewBin = existsSync('/opt/homebrew/bin') ? '/opt/homebrew/bin' : undefined;
+  const asdfShims = join(homedir(), '.asdf', 'shims');
+  const asdfBin = existsSync(asdfShims) ? asdfShims : undefined;
+  const pathParts = [
+    dirname(nodePath),
+    claudeBinDir,
+    asdfBin,
+    homebrewBin,
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+  ].filter(Boolean);
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -164,9 +173,15 @@ async function installLinux(): Promise<void> {
     .map(([k, v]) => `Environment="${k}=${v}"`)
     .join('\n');
 
-  const pathParts = [dirname(nodePath), claudeBinDir, '/usr/local/bin', '/usr/bin', '/bin'].filter(
-    Boolean,
-  );
+  const linuxbrewBin = existsSync('/home/linuxbrew/.linuxbrew/bin') ? '/home/linuxbrew/.linuxbrew/bin' : undefined;
+  const pathParts = [
+    dirname(nodePath),
+    claudeBinDir,
+    linuxbrewBin,
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+  ].filter(Boolean);
 
   const unit = `[Unit]
 Description=Custie Slack Bot
