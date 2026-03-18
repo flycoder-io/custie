@@ -39,10 +39,11 @@ export interface RunAutomationOpts {
   maxTurns: number;
   claudeConfigDir?: string;
   slackClient: App['client'];
+  threadTs?: string;
 }
 
 export async function runAutomation(opts: RunAutomationOpts): Promise<void> {
-  const { prompt, channel, cwd, botName, maxTurns, claudeConfigDir, slackClient } = opts;
+  const { prompt, channel, cwd, botName, maxTurns, claudeConfigDir, slackClient, threadTs } = opts;
 
   try {
     const channelId = await resolveChannelId(slackClient, channel);
@@ -52,7 +53,11 @@ export async function runAutomation(opts: RunAutomationOpts): Promise<void> {
     const chunks = splitMessage(formatted);
 
     for (const chunk of chunks) {
-      await slackClient.chat.postMessage({ channel: channelId, text: chunk });
+      await slackClient.chat.postMessage({
+        channel: channelId,
+        text: chunk,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      });
     }
   } catch (err) {
     console.error(`[automation] Error running automation:`, err);
