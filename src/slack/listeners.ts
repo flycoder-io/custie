@@ -361,44 +361,7 @@ export function registerListeners(
       return;
     }
 
-    // Channels: only respond in threads with an active session
-    if (!('thread_ts' in event) || !event.thread_ts) return;
-
-    const threadTs = event.thread_ts;
-    const threadKey = `${channelId}:${threadTs}`;
-
-    const session = store.getSession(channelId, threadTs);
-    if (!session) return;
-
-    const userId = await ensureBotUserId(client);
-    // Skip if message mentions the bot (handled by app_mention)
-    if (event.text.includes(`<@${userId}>`)) return;
-    // Skip if message mentions another user — they're talking to someone else
-    if (/<@U[A-Z0-9]+>/.test(event.text)) return;
-
-    const prompt = event.text.trim();
-    if (!prompt) return;
-
-    if (debug) {
-      const [userName, channelName] = await Promise.all([
-        senderId ? resolveUser(client, senderId) : Promise.resolve('unknown'),
-        resolveChannel(client, channelId),
-      ]);
-      console.log(
-        `[thread] user=${userName} channel=#${channelName} thread=${threadTs} prompt="${prompt}"`,
-      );
-    }
-
-    queue.enqueue(threadKey, async () => {
-      // Include thread context if this is the first interaction in an existing thread
-      // (e.g. replying to an automation-posted message)
-      let enrichedPrompt = prompt;
-      if (!session.sessionId) {
-        const userId = await ensureBotUserId(client);
-        const threadContext = await fetchThreadContext(client, channelId, threadTs, userId);
-        enrichedPrompt = threadContext + prompt;
-      }
-      await handleMessage(client, say, channelId, threadTs, enrichedPrompt, senderId, session.sessionId, threadTs);
-    });
+    // Channels: require @mention to interact (handled by app_mention handler).
+    // Thread context is automatically included when there's no existing session.
   });
 }
