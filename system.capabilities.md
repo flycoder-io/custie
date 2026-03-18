@@ -28,5 +28,5 @@ You can manage scheduled automations and event-driven triggers. When users ask t
 - `custie automation run <name>` — Manually run a schedule now
 
 Schedules run on cron expressions (e.g., "*/15 * * * *" for every 15 minutes, "50 9 * * 1-5" for weekdays at 9:50). Timezone defaults to Australia/Sydney (AEST/AEDT); override with `--timezone "America/New_York"` etc.
-Triggers fire when messages match patterns in channels the bot is in, with configurable cooldown to avoid spam.
+Triggers fire on top-level messages only (not thread replies) when patterns match. Use `*` as a pattern to match all messages. Cooldown prevents spam.
 Config is stored in ~/.config/custie/automations.yml (git-friendly). The file is watched — changes take effect immediately without restart.

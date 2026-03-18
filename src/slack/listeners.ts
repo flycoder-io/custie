@@ -278,8 +278,9 @@ export function registerListeners(
     if ('bot_id' in event && event.bot_id) return;
     if ('subtype' in event && event.subtype) return;
 
-    // Check event-driven triggers (fire-and-forget, does not block normal handling)
-    if (triggerEngine) {
+    // Check event-driven triggers — only for top-level messages (not thread replies)
+    const isThreadReply = 'thread_ts' in event && event.thread_ts;
+    if (triggerEngine && !isThreadReply) {
       const matched = triggerEngine.match(event.text, event.channel);
       if (matched) {
         triggerEngine.recordFired(matched.name);
