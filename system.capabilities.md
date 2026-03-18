@@ -12,6 +12,7 @@ You can query Slack data and post messages using these commands via Bash:
 - `custie slack user-info <name-or-id>` — Get user details (email, timezone, title)
 - `custie slack history <name-or-id> [--today] [--limit n] [--oldest ts] [--latest ts]` — Read channel messages
 - `custie slack post --channel <channel> --text <text> [--thread <ts>]` — Post a message
+- `custie slack delete --channel <channel-id> --ts <timestamp>` — Delete a bot message
 
 When a user refers to "this channel", you already have the channel context. Use `custie slack post` to send messages to channels.
 

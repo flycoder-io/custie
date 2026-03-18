@@ -11,6 +11,7 @@ const USAGE = `
     user-info <name-or-id>          Show user details
     history <name-or-id>            Show recent channel messages
     post --channel <ch> --text <t>  Post a message to a channel
+    delete --channel <ch> --ts <t>  Delete a bot message
 
   Options:
     --limit <n>                     Max results to return (default: 100)
@@ -293,6 +294,20 @@ export async function runSlackCmd(args: string[]): Promise<void> {
     case 'post': {
       const client = createClient();
       await postMessage(client, args.slice(1));
+      break;
+    }
+
+    case 'delete': {
+      const channel = getArg(args, '--channel');
+      const ts = getArg(args, '--ts');
+      if (!channel || !ts) {
+        console.error('Usage: custie slack delete --channel <channel-id> --ts <timestamp>');
+        process.exit(1);
+      }
+      const client = createClient();
+      const channelId = await resolveChannelId(client, channel);
+      await client.chat.delete({ channel: channelId, ts });
+      console.log(`Message deleted (channel: ${channelId}, ts: ${ts}).`);
       break;
     }
 
