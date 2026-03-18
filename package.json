@@ -1,6 +1,6 @@
 {
   "name": "custie",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "description": "Claude Code, inside your Slack",
   "license": "MIT",
   "type": "module",
