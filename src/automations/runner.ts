@@ -40,14 +40,18 @@ export interface RunAutomationOpts {
   claudeConfigDir?: string;
   slackClient: App['client'];
   threadTs?: string;
+  silent?: boolean;
 }
 
 export async function runAutomation(opts: RunAutomationOpts): Promise<void> {
-  const { prompt, channel, cwd, botName, maxTurns, claudeConfigDir, slackClient, threadTs } = opts;
+  const { prompt, channel, cwd, botName, maxTurns, claudeConfigDir, slackClient, threadTs, silent } = opts;
 
   try {
     const channelId = await resolveChannelId(slackClient, channel);
     const response = await askClaude(prompt, cwd, botName, maxTurns, claudeConfigDir);
+
+    // In silent mode, Claude handles posting via custie slack post in the prompt
+    if (silent) return;
 
     const formatted = toSlackMarkdown(response.text);
     const chunks = splitMessage(formatted);
