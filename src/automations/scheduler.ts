@@ -1,19 +1,24 @@
 import cron from 'node-cron';
-import type { ScheduleAutomation } from './config';
+import { DEFAULT_TIMEZONE, type ScheduleAutomation } from './config';
 
 export class Scheduler {
   private jobs = new Map<string, cron.ScheduledTask>();
 
   register(schedule: ScheduleAutomation, runFn: () => Promise<void>): void {
     this.unregister(schedule.name);
-    const task = cron.schedule(schedule.cron, () => {
-      console.log(`[scheduler] Running: ${schedule.name}`);
-      runFn().catch((err) => {
-        console.error(`[scheduler] Error in ${schedule.name}:`, err);
-      });
-    });
+    const timezone = schedule.timezone ?? DEFAULT_TIMEZONE;
+    const task = cron.schedule(
+      schedule.cron,
+      () => {
+        console.log(`[scheduler] Running: ${schedule.name}`);
+        runFn().catch((err) => {
+          console.error(`[scheduler] Error in ${schedule.name}:`, err);
+        });
+      },
+      { timezone },
+    );
     this.jobs.set(schedule.name, task);
-    console.log(`[scheduler] Registered: ${schedule.name} (${schedule.cron})`);
+    console.log(`[scheduler] Registered: ${schedule.name} (${schedule.cron}, ${timezone})`);
   }
 
   unregister(name: string): void {

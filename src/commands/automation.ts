@@ -2,7 +2,7 @@ import { WebClient } from '@slack/web-api';
 import { loadEnvFiles, loadConfig } from '../config';
 import { AutomationManager } from '../automations/manager';
 import { runAutomation } from '../automations/runner';
-import type { ScheduleAutomation, TriggerAutomation } from '../automations/config';
+import { DEFAULT_TIMEZONE, type ScheduleAutomation, type TriggerAutomation } from '../automations/config';
 
 const USAGE = `
   Usage: custie automation <subcommand> [options]
@@ -20,6 +20,7 @@ const USAGE = `
     --cron <expression>             Cron expression
     --channel <#channel>            Target Slack channel
     --prompt <text>                 Prompt to send to Claude
+    --timezone <tz>                 IANA timezone (default: Australia/Sydney)
     --cwd <path>                    Working directory (optional)
 
   Add trigger options:
@@ -47,7 +48,8 @@ function printList(manager: AutomationManager): void {
     console.log('\nSchedules:');
     for (const s of config.schedules) {
       const status = s.enabled ? 'active' : 'disabled';
-      console.log(`  ${s.name} — ${s.cron} → ${s.channel} (${status})`);
+      const tz = s.timezone ?? DEFAULT_TIMEZONE;
+      console.log(`  ${s.name} — ${s.cron} (${tz}) → ${s.channel} (${status})`);
     }
   }
 
@@ -75,6 +77,7 @@ function handleAdd(manager: AutomationManager, args: string[]): void {
     const cronExpr = getArg(args, '--cron');
     const channel = getArg(args, '--channel');
     const prompt = getArg(args, '--prompt');
+    const timezone = getArg(args, '--timezone');
     const cwd = getArg(args, '--cwd');
 
     if (!cronExpr || !channel || !prompt) {
@@ -88,6 +91,7 @@ function handleAdd(manager: AutomationManager, args: string[]): void {
       cron: cronExpr,
       prompt,
       channel,
+      timezone,
       cwd,
       created_at: new Date().toISOString(),
     };

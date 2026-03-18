@@ -3,12 +3,15 @@ import yaml from 'js-yaml';
 import cron from 'node-cron';
 import { paths } from '../paths';
 
+export const DEFAULT_TIMEZONE = 'Australia/Sydney';
+
 export interface ScheduleAutomation {
   name: string;
   enabled: boolean;
   cron: string;
   prompt: string;
   channel: string;
+  timezone?: string;
   cwd?: string;
   created_by?: string;
   created_at?: string;
