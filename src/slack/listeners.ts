@@ -71,6 +71,53 @@ async function extractSessionFromParent(
   }
 }
 
+async function fetchThreadContext(
+  client: App['client'],
+  channelId: string,
+  threadTs: string,
+  botUserId: string,
+): Promise<string> {
+  try {
+    const res = await client.conversations.replies({
+      channel: channelId,
+      ts: threadTs,
+      limit: 50,
+      inclusive: true,
+    });
+    const messages = res.messages ?? [];
+    if (messages.length <= 1) {
+      // Only the current message — just include the parent
+      const parent = messages[0];
+      if (parent?.text) {
+        const author = parent.user
+          ? await resolveUser(client, parent.user)
+          : parent.bot_id
+            ? 'bot'
+            : 'unknown';
+        return `[thread context — parent message by ${author}]\n${parent.text}\n[end thread context]\n\n`;
+      }
+      return '';
+    }
+
+    // Exclude the last message (the current user prompt) and build context
+    const prior = messages.slice(0, -1);
+    const lines: string[] = [];
+    for (const msg of prior) {
+      const author = msg.user
+        ? msg.user === botUserId
+          ? 'you (bot)'
+          : await resolveUser(client, msg.user)
+        : msg.bot_id
+          ? 'you (bot)'
+          : 'unknown';
+      lines.push(`${author}: ${msg.text ?? ''}`);
+    }
+    return `[thread context — previous messages in this thread]\n${lines.join('\n')}\n[end thread context]\n\n`;
+  } catch {
+    return '';
+  }
+}
+
 // Cache: subteam ID → Set of member user IDs (refreshed every 10 minutes)
 const groupMemberCache = new Map<string, { members: Set<string>; fetchedAt: number }>();
 const GROUP_CACHE_TTL = 10 * 60 * 1000;
@@ -215,7 +262,14 @@ export function registerListeners(
           console.log(`[mention] resuming session from parent message: ${sessionId}`);
         }
       }
-      await handleMessage(client, say, channelId, threadTs, prompt, event.user, sessionId, threadTs);
+      // When no existing session, include thread history so Claude has context
+      let enrichedPrompt = prompt;
+      if (!sessionId && event.thread_ts) {
+        const userId = await ensureBotUserId(client);
+        const threadContext = await fetchThreadContext(client, channelId, threadTs, userId);
+        enrichedPrompt = threadContext + prompt;
+      }
+      await handleMessage(client, say, channelId, threadTs, enrichedPrompt, event.user, sessionId, threadTs);
     });
   });
 
@@ -336,7 +390,15 @@ export function registerListeners(
     }
 
     queue.enqueue(threadKey, async () => {
-      await handleMessage(client, say, channelId, threadTs, prompt, senderId, session.sessionId, threadTs);
+      // Include thread context if this is the first interaction in an existing thread
+      // (e.g. replying to an automation-posted message)
+      let enrichedPrompt = prompt;
+      if (!session.sessionId) {
+        const userId = await ensureBotUserId(client);
+        const threadContext = await fetchThreadContext(client, channelId, threadTs, userId);
+        enrichedPrompt = threadContext + prompt;
+      }
+      await handleMessage(client, say, channelId, threadTs, enrichedPrompt, senderId, session.sessionId, threadTs);
     });
   });
 }
