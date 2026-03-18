@@ -293,6 +293,7 @@ export function registerListeners(
           claudeConfigDir: config.claudeConfigDir,
           slackClient: client,
           threadTs: event.ts,
+          silent: true,
         }).catch((err) => console.error('[trigger] Error:', err));
       }
     }
