@@ -21,8 +21,10 @@ export class TriggerEngine {
       // Check channel filter
       if (!trigger.channels.includes('*') && !trigger.channels.includes(channelId)) continue;
 
-      // Check pattern match (case-insensitive substring)
-      const matched = trigger.patterns.some((pattern) => lower.includes(pattern.toLowerCase()));
+      // Check pattern match (* matches everything, otherwise case-insensitive substring)
+      const matched = trigger.patterns.some(
+        (pattern) => pattern === '*' || lower.includes(pattern.toLowerCase()),
+      );
       if (matched) return trigger;
     }
 
