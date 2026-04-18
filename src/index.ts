@@ -4,6 +4,7 @@ import { paths, ensureDirs } from './paths';
 import { initAutomations } from './automations';
 import { createSlackApp } from './slack/app';
 import { registerListeners } from './slack/listeners';
+import { AutomationRunStore } from './store/automation-run-store';
 import { SessionStore } from './store/session-store';
 
 const ts = () => new Date().toISOString();
@@ -14,6 +15,7 @@ export async function startServer(): Promise<void> {
   const config = loadConfig();
 
   const store = new SessionStore(paths.DB_FILE);
+  const runStore = new AutomationRunStore(paths.DB_FILE);
 
   const app = createSlackApp(config);
 
@@ -26,7 +28,7 @@ export async function startServer(): Promise<void> {
   socket.on('reconnecting', () => console.log(`[${ts()}] [custie] socket reconnecting`));
   socket.on('disconnected', () => console.log(`[${ts()}] [custie] socket disconnected`));
 
-  const automations = initAutomations(app, config);
+  const automations = initAutomations(app, config, runStore);
   registerListeners(app, store, config, automations.triggerEngine);
 
   console.log(`[${ts()}] [custie] starting (pid=${process.pid})`);
@@ -36,6 +38,7 @@ export async function startServer(): Promise<void> {
   const shutdown = () => {
     console.log(`[${ts()}] [custie] shutting down`);
     automations.shutdown();
+    runStore.close();
     store.close();
     process.exit(0);
   };

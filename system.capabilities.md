@@ -29,5 +29,6 @@ You can manage scheduled automations and event-driven triggers. When users ask t
 - `custie automation run <name>` — Manually run a schedule now
 
 Schedules run on cron expressions (e.g., "*/15 * * * *" for every 15 minutes, "50 9 * * 1-5" for weekdays at 9:50). Timezone defaults to Australia/Sydney (AEST/AEDT); override with `--timezone "America/New_York"` etc.
+Set `catchup: true` on a schedule to run it immediately on startup if the last recorded run is older than the most recent expected cron tick (covers machine-off / restart gaps — backfills the single most recent missed slot only).
 Triggers fire on top-level messages only (not thread replies) when patterns match. Use `*` as a pattern to match all messages. Cooldown prevents spam.
 Config is stored in ~/.config/custie/automations.yml (git-friendly). The file is watched — changes take effect immediately without restart.

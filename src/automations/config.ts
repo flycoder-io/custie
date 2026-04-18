@@ -13,6 +13,7 @@ export interface ScheduleAutomation {
   channel: string;
   timezone?: string;
   cwd?: string;
+  catchup?: boolean;
   created_by?: string;
   created_at?: string;
 }
