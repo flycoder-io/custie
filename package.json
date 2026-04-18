@@ -19,6 +19,7 @@
     "dev:debug": "DEBUG=true tsx src/cli.ts start",
     "build": "tsup",
     "start": "node dist/cli.js start",
+    "reload": "pnpm run build && launchctl kickstart -k \"gui/$(id -u)/io.flycoder.custie\"",
     "lint": "oxlint src/",
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",

@@ -48,9 +48,14 @@ custie slack post --channel <ch> --text <text>  # Post a message
 pnpm run dev             # Hot-reload development server (tsx)
 pnpm run build           # Compile to dist/ (tsup, ESM)
 pnpm start               # Run compiled CLI (custie start)
+pnpm run reload          # Rebuild + restart the installed launchd service (macOS)
 pnpm run lint            # oxlint
 pnpm run format          # Prettier
 ```
+
+`pnpm run reload` assumes the global `custie` bin is `npm link`-ed to this repo
+(so `dist/` changes are picked up without reinstall). If `custie upgrade` has
+overwritten the symlink, re-run `npm link` from the repo root.
 
 ## Key Patterns
 
