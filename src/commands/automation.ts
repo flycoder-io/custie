@@ -22,6 +22,7 @@ const USAGE = `
     --prompt <text>                 Prompt to send to Claude
     --timezone <tz>                 IANA timezone (default: Australia/Sydney)
     --cwd <path>                    Working directory (optional)
+    --catchup                       Fire on startup if last run is older than the most recent cron tick
 
   Add trigger options:
     --name <name>                   Name of the trigger
@@ -79,6 +80,7 @@ function handleAdd(manager: AutomationManager, args: string[]): void {
     const prompt = getArg(args, '--prompt');
     const timezone = getArg(args, '--timezone');
     const cwd = getArg(args, '--cwd');
+    const catchup = args.includes('--catchup');
 
     if (!cronExpr || !channel || !prompt) {
       console.error('--cron, --channel, and --prompt are required for schedules');
@@ -93,6 +95,7 @@ function handleAdd(manager: AutomationManager, args: string[]): void {
       channel,
       timezone,
       cwd,
+      catchup: catchup || undefined,
       created_at: new Date().toISOString(),
     };
     manager.addSchedule(schedule);

@@ -2,6 +2,7 @@ import { watch, type FSWatcher } from 'node:fs';
 import type { App } from '@slack/bolt';
 import type { Config } from '../config';
 import { paths } from '../paths';
+import type { AutomationRunStore } from '../store/automation-run-store';
 import { loadAutomations } from './config';
 import { runAutomation } from './runner';
 import { AutomationManager } from './manager';
@@ -21,8 +22,12 @@ export interface AutomationsHandle {
   shutdown: () => void;
 }
 
-export function initAutomations(app: App, config: Config): AutomationsHandle {
-  const scheduler = new Scheduler();
+export function initAutomations(
+  app: App,
+  config: Config,
+  runStore?: AutomationRunStore,
+): AutomationsHandle {
+  const scheduler = new Scheduler(runStore);
   const triggerEngine = new TriggerEngine();
   let watcher: FSWatcher | undefined;
 
