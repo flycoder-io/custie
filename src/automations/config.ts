@@ -14,6 +14,7 @@ export interface ScheduleAutomation {
   timezone?: string;
   cwd?: string;
   catchup?: boolean;
+  silent?: boolean;
   created_by?: string;
   created_at?: string;
 }
