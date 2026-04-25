@@ -47,6 +47,7 @@ export function initAutomations(
           maxTurns: config.maxTurns,
           claudeConfigDir: config.claudeConfigDir,
           slackClient: app.client,
+          silent: schedule.silent,
         }),
       );
     }
