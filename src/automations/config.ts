@@ -31,12 +31,39 @@ export interface TriggerAutomation {
   created_at?: string;
 }
 
+// Fires when a specific user is @-mentioned. Unlike TriggerAutomation
+// (text-pattern matching, top-level only), this fires on the *event of being
+// tagged*, in any channel, in threads too — and posts to a separate channel.
+// Use case: surface mentions of yourself to your private summary channel so
+// you don't have to track many channels manually.
+export interface MentionTrigger {
+  name: string;
+  enabled: boolean;
+  // Whose mention triggers this. 'owner' resolves to OWNER_USER_ID env var.
+  // Otherwise a literal Slack user ID like 'U027C1PSVEJ'.
+  user: string;
+  // Channel where the summary is posted (channel ID preferred to skip resolution).
+  target_channel: string;
+  // Optional emoji to add as a reaction on the source message (no leading colon).
+  react_with?: string;
+  // Whether to fire on thread-reply mentions too. Default: true.
+  include_thread_replies?: boolean;
+  // Dedup per (channel, thread) so one thread → one summary. Default: true.
+  dedup_per_thread?: boolean;
+  // Restrict to certain source channels. Empty/undefined = listen everywhere.
+  source_channels?: string[];
+  prompt: string;
+  created_by?: string;
+  created_at?: string;
+}
+
 export interface AutomationsConfig {
   schedules: ScheduleAutomation[];
   triggers: TriggerAutomation[];
+  mention_triggers: MentionTrigger[];
 }
 
-const EMPTY_CONFIG: AutomationsConfig = { schedules: [], triggers: [] };
+const EMPTY_CONFIG: AutomationsConfig = { schedules: [], triggers: [], mention_triggers: [] };
 
 export function loadAutomations(): AutomationsConfig {
   const filePath = paths.AUTOMATIONS_FILE;
@@ -49,6 +76,7 @@ export function loadAutomations(): AutomationsConfig {
   return {
     schedules: parsed?.schedules ?? [],
     triggers: parsed?.triggers ?? [],
+    mention_triggers: parsed?.mention_triggers ?? [],
   };
 }
 
@@ -75,5 +103,14 @@ export function validateTrigger(t: TriggerAutomation): string[] {
   if (!t.channels?.length) errors.push('at least one channel is required');
   if (!t.prompt) errors.push('prompt is required');
   if (t.cooldown < 0) errors.push('cooldown must be >= 0');
+  return errors;
+}
+
+export function validateMentionTrigger(t: MentionTrigger): string[] {
+  const errors: string[] = [];
+  if (!t.name) errors.push('name is required');
+  if (!t.user) errors.push('user is required (Slack user ID or "owner")');
+  if (!t.target_channel) errors.push('target_channel is required');
+  if (!t.prompt) errors.push('prompt is required');
   return errors;
 }

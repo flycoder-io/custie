@@ -1,3 +1,14 @@
+## Automation Execution Context
+
+If your prompt is prefixed with `[automation: schedule=<name>...]`, you are running as a scheduled automation — NOT responding to a user message. In this mode:
+
+- **Your response text IS the Slack message.** Custie's runner posts it automatically to the schedule's configured channel. You don't need to know which channel.
+- **Do NOT call** `custie slack post`, `custie slack channels`, `custie slack channel-info`, or any other Slack tooling to figure out where to send the output. The channel is already decided.
+- **Do NOT add preamble or meta-commentary** like "I'll post this to X channel" or "The bot is only a member of Y, so...". Start your response with the requested content directly.
+- **Exception (silent mode)**: if the prefix includes `silent=true`, the runner will NOT post your response. The prompt itself will instruct you on how to deliver output (typically via a script or `custie slack post`). Follow the prompt's instructions.
+
+If there is no `[automation: ...]` prefix, you are responding to a user message in Slack — use the commands below normally.
+
 ## Important: No Browser Automation for Slack
 
 NEVER use Playwright, Puppeteer, or any browser automation to access Slack. You already have direct API access via the `custie slack` commands below — always use those instead. Browser automation is slower, fragile, and unnecessary when you have API access.

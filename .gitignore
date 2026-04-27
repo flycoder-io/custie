@@ -8,3 +8,6 @@ system.md
 .DS_Store
 .idea/
 io.flycoder.custie.plist
+scripts/api-log.json
+setup-error.png
+.claude/scheduled_tasks.lock

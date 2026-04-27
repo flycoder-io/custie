@@ -2,10 +2,15 @@ import type { App } from '@slack/bolt';
 import type { Config } from '../config';
 import type { SessionStore } from '../store/session-store';
 import type { TriggerEngine } from '../automations/triggers';
+import {
+  type MentionTriggerEngine,
+  fireMentionTrigger,
+} from '../automations/mention-trigger-engine';
 import { askClaude } from '../claude/agent';
 import { runAutomation } from '../automations/runner';
 import { MessageQueue } from '../queue/message-queue';
 import { toSlackMarkdown, splitMessage } from './formatters';
+import { markdownToBlocks, blockToFallbackText } from './blocks';
 
 const REJECT_MESSAGES = [
   "Sorry, I'm a personal assistant and only respond to my owner. :bow:",
@@ -69,6 +74,27 @@ async function extractSessionFromParent(
   } catch {
     return undefined;
   }
+}
+
+async function getThreadParticipants(
+  client: App['client'],
+  channelId: string,
+  threadTs: string,
+): Promise<Set<string>> {
+  const participants = new Set<string>();
+  try {
+    const res = await client.conversations.replies({
+      channel: channelId,
+      ts: threadTs,
+      limit: 200,
+    });
+    for (const msg of res.messages ?? []) {
+      if (msg.user) participants.add(msg.user);
+    }
+  } catch {
+    // ignore
+  }
+  return participants;
 }
 
 async function fetchThreadContext(
@@ -146,6 +172,7 @@ export function registerListeners(
   store: SessionStore,
   config: Config,
   triggerEngine?: TriggerEngine,
+  mentionTriggerEngine?: MentionTriggerEngine,
 ): void {
   const { claudeCwd, claudeConfigDir, botName, allowedUserIds, maxTurns, ownerUserId } = config;
   const queue = new MessageQueue();
@@ -197,25 +224,34 @@ export function registerListeners(
       );
       store.saveSession(channelId, sessionKey, response.sessionId);
 
-      const formatted = toSlackMarkdown(response.text);
-      const chunks = splitMessage(formatted);
+      const blocks = markdownToBlocks(response.text);
+      const messages = blocks.length > 0
+        ? blocks.map((b) => ({ blocks: [b], text: blockToFallbackText(b) }))
+        : splitMessage(toSlackMarkdown(response.text)).map((text) => ({ text }));
 
       if (debug) {
         console.log(
-          `[response] length=${response.text.length} chunks=${chunks.length} chunkSizes=[${chunks.map((c) => c.length).join(',')}]`,
+          `[response] length=${response.text.length} messages=${messages.length}`,
         );
       }
 
       // Update the typing message with the first chunk
+      const first = messages[0]!;
       await client.chat.update({
         channel: channelId,
         ts: typingMsg.ts,
-        text: chunks[0],
+        text: first.text,
+        ...('blocks' in first ? { blocks: first.blocks } : {}),
       });
 
       // Post remaining chunks as new messages
-      for (let i = 1; i < chunks.length; i++) {
-        await say({ text: chunks[i], ...(threadTs ? { thread_ts: threadTs } : {}) });
+      for (let i = 1; i < messages.length; i++) {
+        const m = messages[i]!;
+        await say({
+          text: m.text,
+          ...('blocks' in m ? { blocks: m.blocks } : {}),
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        });
       }
     } catch (err) {
       console.error('[listener] Error handling message:', err);
@@ -285,6 +321,7 @@ export function registerListeners(
       if (matched) {
         triggerEngine.recordFired(matched.name);
         runAutomation({
+          name: matched.name,
           prompt: `Context: A user said "${event.text}" in this channel.\n\n${matched.prompt}`,
           channel: event.channel,
           cwd: config.claudeCwd,
@@ -322,6 +359,42 @@ export function registerListeners(
         } catch (err) {
           if (debug) console.log('[owner-mention] Failed to add eyes reaction:', err);
         }
+      }
+    }
+
+    // Mention triggers — config-driven. Fires when a configured user is tagged
+    // in any channel; runs Claude with the trigger's prompt and posts to its
+    // target_channel. Different from pattern triggers (text match) above.
+    if (mentionTriggerEngine) {
+      const senderId = ('user' in event ? event.user : undefined) as string | undefined;
+      const matched = mentionTriggerEngine.matchAll({
+        client,
+        channelId: event.channel,
+        ts: event.ts,
+        threadTs: 'thread_ts' in event ? (event.thread_ts as string | undefined) : undefined,
+        text: event.text,
+        senderId,
+      });
+      for (const trigger of matched) {
+        fireMentionTrigger(
+          trigger,
+          {
+            client,
+            channelId: event.channel,
+            ts: event.ts,
+            threadTs: 'thread_ts' in event ? (event.thread_ts as string | undefined) : undefined,
+            text: event.text,
+            senderId,
+          },
+          {
+            botName: config.botName,
+            maxTurns: config.maxTurns,
+            claudeConfigDir: config.claudeConfigDir,
+            claudeCwd: config.claudeCwd,
+          },
+        ).catch((err) =>
+          console.error(`[mention-trigger:${trigger.name}] Error:`, err),
+        );
       }
     }
 
@@ -364,7 +437,40 @@ export function registerListeners(
       return;
     }
 
-    // Channels: require @mention to interact (handled by app_mention handler).
-    // Thread context is automatically included when there's no existing session.
+    // Channels: require @mention to start interacting (handled by app_mention handler).
+    // Once a session exists for a thread, allow mention-less replies if the thread
+    // only involves the sender and the bot (a private 1-on-1 thread).
+    const threadTs = ('thread_ts' in event ? event.thread_ts : undefined) as string | undefined;
+    if (!threadTs || !senderId) return;
+
+    const existingSession = store.getSession(channelId, threadTs);
+    if (!existingSession) return;
+
+    const botId = await ensureBotUserId(client);
+    const participants = await getThreadParticipants(client, channelId, threadTs);
+    const humans = new Set([...participants].filter((id) => id !== botId));
+    if (humans.size !== 1 || !humans.has(senderId)) return;
+
+    const prompt = event.text.trim();
+    if (!prompt) return;
+
+    if (debug) {
+      const userName = await resolveUser(client, senderId);
+      console.log(`[thread-followup] user=${userName} thread=${threadTs} prompt="${prompt}"`);
+    }
+
+    const threadKey = `${channelId}:${threadTs}`;
+    queue.enqueue(threadKey, async () => {
+      await handleMessage(
+        client,
+        say,
+        channelId,
+        threadTs,
+        prompt,
+        senderId,
+        existingSession.sessionId,
+        threadTs,
+      );
+    });
   });
 }

@@ -1,37 +1,11 @@
 import type { App } from '@slack/bolt';
 import { askClaude } from '../claude/agent';
 import { toSlackMarkdown, splitMessage } from '../slack/formatters';
-
-const channelIdCache = new Map<string, string>();
-
-async function resolveChannelId(client: App['client'], channel: string): Promise<string> {
-  // Already a channel ID
-  if (!channel.startsWith('#')) return channel;
-
-  const name = channel.slice(1);
-  const cached = channelIdCache.get(name);
-  if (cached) return cached;
-
-  let cursor: string | undefined;
-  do {
-    const res = await client.conversations.list({
-      types: 'public_channel,private_channel',
-      limit: 200,
-      cursor,
-    });
-    for (const ch of res.channels ?? []) {
-      if (ch.name === name && ch.id) {
-        channelIdCache.set(name, ch.id);
-        return ch.id;
-      }
-    }
-    cursor = res.response_metadata?.next_cursor || undefined;
-  } while (cursor);
-
-  throw new Error(`Channel not found: ${channel}`);
-}
+import { markdownToBlocks, blockToFallbackText } from '../slack/blocks';
+import { resolveChannelId } from '../store/channel-cache';
 
 export interface RunAutomationOpts {
+  name: string;
   prompt: string;
   channel: string;
   cwd: string;
@@ -44,22 +18,30 @@ export interface RunAutomationOpts {
 }
 
 export async function runAutomation(opts: RunAutomationOpts): Promise<void> {
-  const { prompt, channel, cwd, botName, maxTurns, claudeConfigDir, slackClient, threadTs, silent } = opts;
+  const { name, prompt, channel, cwd, botName, maxTurns, claudeConfigDir, slackClient, threadTs, silent } = opts;
+
+  // Prefix lets Claude detect it's running as a scheduled automation (vs an
+  // interactive Slack message). system.capabilities.md teaches it that in this
+  // mode, its response IS the message — don't try to post via Slack tools.
+  const automationPrefix = `[automation: schedule=${name}${silent ? ', silent=true' : ''}]\n\n`;
 
   try {
     const channelId = await resolveChannelId(slackClient, channel);
-    const response = await askClaude(prompt, cwd, botName, maxTurns, claudeConfigDir);
+    const response = await askClaude(automationPrefix + prompt, cwd, botName, maxTurns, claudeConfigDir);
 
     // In silent mode, Claude handles posting via custie slack post in the prompt
     if (silent) return;
 
-    const formatted = toSlackMarkdown(response.text);
-    const chunks = splitMessage(formatted);
+    const blocks = markdownToBlocks(response.text);
+    const messages = blocks.length > 0
+      ? blocks.map((b) => ({ blocks: [b], text: blockToFallbackText(b) }))
+      : splitMessage(toSlackMarkdown(response.text)).map((text) => ({ text }));
 
-    for (const chunk of chunks) {
+    for (const m of messages) {
       await slackClient.chat.postMessage({
         channel: channelId,
-        text: chunk,
+        text: m.text,
+        ...('blocks' in m ? { blocks: m.blocks } : {}),
         ...(threadTs ? { thread_ts: threadTs } : {}),
       });
     }

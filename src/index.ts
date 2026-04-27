@@ -6,6 +6,7 @@ import { createSlackApp } from './slack/app';
 import { registerListeners } from './slack/listeners';
 import { AutomationRunStore } from './store/automation-run-store';
 import { SessionStore } from './store/session-store';
+import { startWatchdog } from './health/watchdog';
 
 const ts = () => new Date().toISOString();
 
@@ -28,8 +29,16 @@ export async function startServer(): Promise<void> {
   socket.on('reconnecting', () => console.log(`[${ts()}] [custie] socket reconnecting`));
   socket.on('disconnected', () => console.log(`[${ts()}] [custie] socket disconnected`));
 
+  // Self-healing: if the socket gets stuck in reconnecting/disconnected for too
+  // long, or auth.test starts failing, exit so launchd KeepAlive respawns us.
+  // This catches the "socket says connected but no events flow" failure mode.
+  const watchdog = startWatchdog({
+    socket,
+    authTest: () => app.client.auth.test(),
+  });
+
   const automations = initAutomations(app, config, runStore);
-  registerListeners(app, store, config, automations.triggerEngine);
+  registerListeners(app, store, config, automations.triggerEngine, automations.mentionTriggerEngine);
 
   console.log(`[${ts()}] [custie] starting (pid=${process.pid})`);
   await app.start();
@@ -37,6 +46,7 @@ export async function startServer(): Promise<void> {
 
   const shutdown = () => {
     console.log(`[${ts()}] [custie] shutting down`);
+    watchdog.stop();
     automations.shutdown();
     runStore.close();
     store.close();
