@@ -1,12 +1,24 @@
 import { WebClient } from '@slack/web-api';
 import { loadEnvFiles, loadConfig } from '../config';
+import {
+  resolveChannelId as cachedResolveChannelId,
+  refreshCache,
+  listMemberChannels,
+} from '../store/channel-cache';
+import {
+  resolveUserId as cachedResolveUserId,
+  refreshUserCache,
+  listActiveUsers,
+  ensureUsersCached,
+  displayNameFor,
+} from '../store/user-cache';
 
 const USAGE = `
   Usage: custie slack <subcommand> [options]
 
   Subcommands:
-    channels                        List channels the bot is in
-    users                           List workspace users
+    channels [--refresh]            List channels the bot is in (cached)
+    users [--refresh]               List workspace users (cached)
     channel-info <name-or-id>       Show channel details
     user-info <name-or-id>          Show user details
     history <name-or-id>            Show recent channel messages
@@ -18,6 +30,7 @@ const USAGE = `
     --today                         Only show today's messages (history)
     --oldest <timestamp>            Oldest message timestamp (history)
     --latest <timestamp>            Latest message timestamp (history)
+    --refresh                       Force refresh of cached channel list
 `;
 
 function getArg(args: string[], flag: string): string | undefined {
@@ -31,14 +44,14 @@ function createClient(): WebClient {
   return new WebClient(config.slackBotToken);
 }
 
-async function listChannels(client: WebClient, limit: number): Promise<void> {
-  const result = await client.conversations.list({
-    types: 'public_channel,private_channel',
-    exclude_archived: true,
-    limit,
-  });
-
-  const channels = (result.channels ?? []).filter((ch) => ch.is_member);
+async function listChannels(client: WebClient, refresh: boolean): Promise<void> {
+  if (refresh) await refreshCache(client);
+  let channels = listMemberChannels();
+  if (channels.length === 0) {
+    // Empty cache (or genuinely no member channels) — fall back to a refresh.
+    await refreshCache(client);
+    channels = listMemberChannels();
+  }
   if (!channels.length) {
     console.log('The bot is not a member of any channels.');
     return;
@@ -46,17 +59,18 @@ async function listChannels(client: WebClient, limit: number): Promise<void> {
 
   console.log(`Channels the bot is in (${channels.length}):\n`);
   for (const ch of channels) {
-    const purpose = ch.purpose?.value ? ` — ${ch.purpose.value}` : '';
+    const purpose = ch.purpose ? ` — ${ch.purpose}` : '';
     console.log(`  #${ch.name} (${ch.id})${purpose}`);
   }
 }
 
-async function listUsers(client: WebClient, limit: number): Promise<void> {
-  const result = await client.users.list({ limit });
-  const users = (result.members ?? []).filter(
-    (u) => !u.deleted && !u.is_bot && u.id !== 'USLACKBOT',
-  );
-
+async function listUsers(client: WebClient, refresh: boolean): Promise<void> {
+  if (refresh) await refreshUserCache(client);
+  let users = listActiveUsers();
+  if (users.length === 0) {
+    await refreshUserCache(client);
+    users = listActiveUsers();
+  }
   if (!users.length) {
     console.log('No users found.');
     return;
@@ -64,31 +78,13 @@ async function listUsers(client: WebClient, limit: number): Promise<void> {
 
   console.log(`Workspace users (${users.length}):\n`);
   for (const u of users) {
-    const displayName = u.real_name || u.name || u.id;
-    const tz = u.tz_label ? ` [${u.tz_label}]` : '';
-    console.log(`  ${displayName} (@${u.name}, ${u.id})${tz}`);
+    const displayName = u.real_name || u.display_name || u.name;
+    console.log(`  ${displayName} (@${u.name}, ${u.id})`);
   }
 }
 
 async function channelInfo(client: WebClient, nameOrId: string): Promise<void> {
-  let channelId = nameOrId;
-
-  // If it looks like a name (not starting with C), resolve it
-  if (!nameOrId.startsWith('C')) {
-    const name = nameOrId.replace(/^#/, '');
-    const result = await client.conversations.list({
-      types: 'public_channel,private_channel',
-      exclude_archived: true,
-      limit: 1000,
-    });
-    const match = (result.channels ?? []).find((ch) => ch.name === name);
-    if (!match) {
-      console.error(`Channel "${nameOrId}" not found.`);
-      process.exit(1);
-    }
-    channelId = match.id!;
-  }
-
+  const channelId = await resolveChannelId(client, nameOrId);
   const result = await client.conversations.info({ channel: channelId });
   const ch = result.channel;
   if (!ch) {
@@ -107,20 +103,12 @@ async function channelInfo(client: WebClient, nameOrId: string): Promise<void> {
 }
 
 async function userInfo(client: WebClient, nameOrId: string): Promise<void> {
-  let userId = nameOrId;
-
-  // If it doesn't look like a user ID, search by name
-  if (!nameOrId.startsWith('U')) {
-    const name = nameOrId.replace(/^@/, '');
-    const result = await client.users.list({ limit: 1000 });
-    const match = (result.members ?? []).find(
-      (u) => u.name === name || u.real_name?.toLowerCase() === name.toLowerCase(),
-    );
-    if (!match) {
-      console.error(`User "${nameOrId}" not found.`);
-      process.exit(1);
-    }
-    userId = match.id!;
+  let userId: string;
+  try {
+    userId = await cachedResolveUserId(client, nameOrId);
+  } catch {
+    console.error(`User "${nameOrId}" not found.`);
+    process.exit(1);
   }
 
   const result = await client.users.info({ user: userId });
@@ -142,19 +130,12 @@ async function userInfo(client: WebClient, nameOrId: string): Promise<void> {
 }
 
 async function resolveChannelId(client: WebClient, nameOrId: string): Promise<string> {
-  if (nameOrId.startsWith('C')) return nameOrId;
-  const name = nameOrId.replace(/^#/, '');
-  const result = await client.conversations.list({
-    types: 'public_channel,private_channel',
-    exclude_archived: true,
-    limit: 1000,
-  });
-  const match = (result.channels ?? []).find((ch) => ch.name === name);
-  if (!match) {
+  try {
+    return await cachedResolveChannelId(client, nameOrId);
+  } catch {
     console.error(`Channel "${nameOrId}" not found.`);
     process.exit(1);
   }
-  return match.id!;
 }
 
 async function channelHistory(client: WebClient, nameOrId: string, args: string[]): Promise<void> {
@@ -183,26 +164,22 @@ async function channelHistory(client: WebClient, nameOrId: string, args: string[
     return;
   }
 
-  // Build user cache for display names
+  // Resolve user IDs to display names via cache (one users.list call max).
   const userIds = [...new Set(messages.map((m) => m.user).filter(Boolean))] as string[];
-  const userNames = new Map<string, string>();
-  for (const uid of userIds) {
-    try {
-      const u = await client.users.info({ user: uid });
-      userNames.set(uid, u.user?.real_name || u.user?.name || uid);
-    } catch {
-      userNames.set(uid, uid);
-    }
-  }
+  await ensureUsersCached(client, userIds);
+
+  // Replace raw <@Uxxxx> mentions in message text with display names too.
+  const renderText = (raw: string): string =>
+    raw.replace(/<@(U[A-Z0-9]+)>/g, (_, uid) => `@${displayNameFor(uid)}`);
 
   console.log(`Messages (${messages.length}):\n`);
   for (const msg of messages) {
     const ts = msg.ts ? new Date(parseFloat(msg.ts) * 1000) : null;
     const time = ts ? ts.toLocaleString('en-AU', { timeZone: 'Australia/Sydney' }) : '?';
-    const author = msg.user ? userNames.get(msg.user) ?? msg.user : msg.bot_id ?? 'unknown';
-    const text = msg.text?.replace(/\n/g, '\n    ') ?? '';
+    const author = msg.user ? displayNameFor(msg.user) : msg.bot_id ?? 'unknown';
+    const text = renderText(msg.text ?? '').replace(/\n/g, '\n    ');
     const thread = msg.reply_count ? ` [${msg.reply_count} replies]` : '';
-    console.log(`  [${time}] ${author}${thread}:`);
+    console.log(`  [${time}] ${author} (${msg.user ?? msg.bot_id ?? '?'})${thread}:`);
     console.log(`    ${text}`);
     console.log();
   }
@@ -251,13 +228,13 @@ export async function runSlackCmd(args: string[]): Promise<void> {
   switch (subcommand) {
     case 'channels': {
       const client = createClient();
-      await listChannels(client, limit);
+      await listChannels(client, args.includes('--refresh'));
       break;
     }
 
     case 'users': {
       const client = createClient();
-      await listUsers(client, limit);
+      await listUsers(client, args.includes('--refresh'));
       break;
     }
 

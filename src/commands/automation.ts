@@ -2,18 +2,23 @@ import { WebClient } from '@slack/web-api';
 import { loadEnvFiles, loadConfig } from '../config';
 import { AutomationManager } from '../automations/manager';
 import { runAutomation } from '../automations/runner';
-import { DEFAULT_TIMEZONE, type ScheduleAutomation, type TriggerAutomation } from '../automations/config';
+import {
+  DEFAULT_TIMEZONE,
+  type ScheduleAutomation,
+  type TriggerAutomation,
+  type MentionTrigger,
+} from '../automations/config';
 
 const USAGE = `
   Usage: custie automation <subcommand> [options]
 
   Subcommands:
-    list                            List all automations
-    add --type schedule|trigger     Add an automation
-    remove <name>                   Remove an automation
-    enable <name>                   Enable an automation
-    disable <name>                  Disable an automation
-    run <name>                      Manually run a schedule
+    list                                          List all automations
+    add --type schedule|trigger|mention-trigger   Add an automation
+    remove <name>                                 Remove an automation
+    enable <name>                                 Enable an automation
+    disable <name>                                Disable an automation
+    run <name>                                    Manually run a schedule
 
   Add schedule options:
     --name <name>                   Name of the schedule
@@ -30,6 +35,16 @@ const USAGE = `
     --channels <c1,c2,...|*>        Comma-separated channels or * for all
     --cooldown <seconds>            Cooldown in seconds (default: 300)
     --prompt <text>                 Prompt to send to Claude
+
+  Add mention-trigger options:
+    --name <name>                   Name of the mention trigger
+    --user <id|owner>               Slack user ID to watch (or "owner" for OWNER_USER_ID)
+    --target-channel <id>           Channel ID where the summary is posted
+    --prompt <text>                 Prompt to send to Claude (thread context is prepended)
+    --react-with <emoji>            Optional reaction emoji on the source message
+    --source-channels <c1,c2,...>   Restrict to these source channels (default: all)
+    --no-thread-replies             Don't fire on thread reply mentions
+    --no-dedup                      Allow re-summarising the same thread
 `;
 
 function getArg(args: string[], flag: string): string | undefined {
@@ -40,7 +55,11 @@ function getArg(args: string[], flag: string): string | undefined {
 function printList(manager: AutomationManager): void {
   const config = manager.list();
 
-  if (!config.schedules.length && !config.triggers.length) {
+  if (
+    !config.schedules.length &&
+    !config.triggers.length &&
+    !config.mention_triggers.length
+  ) {
     console.log('No automations configured.');
     return;
   }
@@ -60,6 +79,15 @@ function printList(manager: AutomationManager): void {
       const status = t.enabled ? 'active' : 'disabled';
       const patterns = t.patterns.join(', ');
       console.log(`  ${t.name} — patterns: [${patterns}] → cooldown: ${t.cooldown}s (${status})`);
+    }
+  }
+
+  if (config.mention_triggers.length) {
+    console.log('\nMention triggers:');
+    for (const m of config.mention_triggers) {
+      const status = m.enabled ? 'active' : 'disabled';
+      const sources = m.source_channels?.length ? m.source_channels.join(',') : '*';
+      console.log(`  ${m.name} — @${m.user} in [${sources}] → ${m.target_channel} (${status})`);
     }
   }
   console.log();
@@ -123,8 +151,36 @@ function handleAdd(manager: AutomationManager, args: string[]): void {
     };
     manager.addTrigger(trigger);
     console.log(`Trigger "${name}" added.`);
+  } else if (type === 'mention-trigger') {
+    const user = getArg(args, '--user');
+    const targetChannel = getArg(args, '--target-channel');
+    const prompt = getArg(args, '--prompt');
+    const reactWith = getArg(args, '--react-with');
+    const sourceChannelsRaw = getArg(args, '--source-channels');
+
+    if (!user || !targetChannel || !prompt) {
+      console.error('--user, --target-channel, and --prompt are required for mention-trigger');
+      process.exit(1);
+    }
+
+    const trigger: MentionTrigger = {
+      name,
+      enabled: true,
+      user,
+      target_channel: targetChannel,
+      prompt,
+      react_with: reactWith,
+      source_channels: sourceChannelsRaw
+        ? sourceChannelsRaw.split(',').map((c) => c.trim()).filter(Boolean)
+        : undefined,
+      include_thread_replies: !args.includes('--no-thread-replies'),
+      dedup_per_thread: !args.includes('--no-dedup'),
+      created_at: new Date().toISOString(),
+    };
+    manager.addMentionTrigger(trigger);
+    console.log(`Mention trigger "${name}" added.`);
   } else {
-    console.error('--type must be "schedule" or "trigger"');
+    console.error('--type must be "schedule", "trigger", or "mention-trigger"');
     process.exit(1);
   }
 }
@@ -147,6 +203,7 @@ async function handleRun(manager: AutomationManager, name: string): Promise<void
 
   console.log(`Running "${name}"...`);
   await runAutomation({
+    name: automation.name,
     prompt: automation.prompt,
     channel: automation.channel,
     cwd: automation.cwd ?? config.claudeCwd,

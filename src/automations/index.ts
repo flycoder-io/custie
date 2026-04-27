@@ -8,17 +8,20 @@ import { runAutomation } from './runner';
 import { AutomationManager } from './manager';
 import { Scheduler } from './scheduler';
 import { TriggerEngine } from './triggers';
+import { MentionTriggerEngine } from './mention-trigger-engine';
 
 export * from './config';
 export * from './manager';
 export * from './runner';
 export * from './scheduler';
 export * from './triggers';
+export * from './mention-trigger-engine';
 
 export interface AutomationsHandle {
   manager: AutomationManager;
   scheduler: Scheduler;
   triggerEngine: TriggerEngine;
+  mentionTriggerEngine: MentionTriggerEngine;
   shutdown: () => void;
 }
 
@@ -29,6 +32,7 @@ export function initAutomations(
 ): AutomationsHandle {
   const scheduler = new Scheduler(runStore);
   const triggerEngine = new TriggerEngine();
+  const mentionTriggerEngine = new MentionTriggerEngine({ ownerUserId: config.ownerUserId });
   let watcher: FSWatcher | undefined;
 
   function reload(): void {
@@ -40,6 +44,7 @@ export function initAutomations(
       if (!schedule.enabled) continue;
       scheduler.register(schedule, () =>
         runAutomation({
+          name: schedule.name,
           prompt: schedule.prompt,
           channel: schedule.channel,
           cwd: schedule.cwd ?? config.claudeCwd,
@@ -54,10 +59,14 @@ export function initAutomations(
 
     // Reload triggers
     triggerEngine.load(automations.triggers);
+    mentionTriggerEngine.load(automations.mention_triggers);
 
     const scheduleCount = automations.schedules.filter((s) => s.enabled).length;
     const triggerCount = automations.triggers.filter((t) => t.enabled).length;
-    console.log(`[automations] Loaded ${scheduleCount} schedule(s), ${triggerCount} trigger(s)`);
+    const mentionCount = automations.mention_triggers.filter((t) => t.enabled).length;
+    console.log(
+      `[automations] Loaded ${scheduleCount} schedule(s), ${triggerCount} trigger(s), ${mentionCount} mention-trigger(s)`,
+    );
   }
 
   const manager = new AutomationManager(reload);
@@ -82,6 +91,7 @@ export function initAutomations(
     manager,
     scheduler,
     triggerEngine,
+    mentionTriggerEngine,
     shutdown: () => {
       watcher?.close();
       clearTimeout(debounceTimer);

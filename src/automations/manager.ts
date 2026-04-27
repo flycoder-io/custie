@@ -3,9 +3,11 @@ import {
   saveAutomations,
   validateSchedule,
   validateTrigger,
+  validateMentionTrigger,
   type AutomationsConfig,
   type ScheduleAutomation,
   type TriggerAutomation,
+  type MentionTrigger,
 } from './config';
 
 export type OnChangeCallback = () => void;
@@ -51,17 +53,32 @@ export class AutomationManager {
     this.onChange?.();
   }
 
+  addMentionTrigger(trigger: MentionTrigger): void {
+    const errors = validateMentionTrigger(trigger);
+    if (errors.length) throw new Error(`Invalid mention trigger: ${errors.join(', ')}`);
+
+    const config = loadAutomations();
+    if (config.mention_triggers.some((t) => t.name === trigger.name)) {
+      throw new Error(`Mention trigger "${trigger.name}" already exists`);
+    }
+    config.mention_triggers.push(trigger);
+    saveAutomations(config);
+    this.onChange?.();
+  }
+
   remove(name: string): void {
     const config = loadAutomations();
     const scheduleIdx = config.schedules.findIndex((s) => s.name === name);
     const triggerIdx = config.triggers.findIndex((t) => t.name === name);
+    const mentionIdx = config.mention_triggers.findIndex((t) => t.name === name);
 
-    if (scheduleIdx === -1 && triggerIdx === -1) {
+    if (scheduleIdx === -1 && triggerIdx === -1 && mentionIdx === -1) {
       throw new Error(`Automation "${name}" not found`);
     }
 
     if (scheduleIdx !== -1) config.schedules.splice(scheduleIdx, 1);
     if (triggerIdx !== -1) config.triggers.splice(triggerIdx, 1);
+    if (mentionIdx !== -1) config.mention_triggers.splice(mentionIdx, 1);
     saveAutomations(config);
     this.onChange?.();
   }
@@ -84,7 +101,7 @@ export class AutomationManager {
     this.onChange?.();
   }
 
-  get(name: string): ScheduleAutomation | TriggerAutomation | undefined {
+  get(name: string): ScheduleAutomation | TriggerAutomation | MentionTrigger | undefined {
     const config = loadAutomations();
     return findByName(config, name);
   }
@@ -93,8 +110,10 @@ export class AutomationManager {
 function findByName(
   config: AutomationsConfig,
   name: string,
-): ScheduleAutomation | TriggerAutomation | undefined {
+): ScheduleAutomation | TriggerAutomation | MentionTrigger | undefined {
   return (
-    config.schedules.find((s) => s.name === name) ?? config.triggers.find((t) => t.name === name)
+    config.schedules.find((s) => s.name === name) ??
+    config.triggers.find((t) => t.name === name) ??
+    config.mention_triggers.find((m) => m.name === name)
   );
 }
