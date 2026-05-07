@@ -32,11 +32,14 @@ Custie runs on your machine (or server) and connects to Slack via **Socket Mode*
 
 ## Get Started
 
-First, install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) if you haven't already:
+First, install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) if you haven't already, then run it once to complete the browser sign-in:
 
 ```bash
 npm install -g @anthropic-ai/claude-code
+claude   # signs you in; type /exit once it loads
 ```
+
+> This step is required. The bot spawns Claude Code as a subprocess -- if you skip it, the bot will prompt `/login` inside Slack at runtime and there is no way to finish the browser sign-in from there.
 
 Then install and run Custie:
 
