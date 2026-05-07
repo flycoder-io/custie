@@ -11,6 +11,7 @@ import { runAutomation } from '../automations/runner';
 import { MessageQueue } from '../queue/message-queue';
 import { toSlackMarkdown, splitMessage } from './formatters';
 import { markdownToBlocks, blockToFallbackText } from './blocks';
+import { downloadSlackFiles, buildFilesPromptSection, type SlackFile } from './file-downloader';
 
 const REJECT_MESSAGES = [
   "Sorry, I'm a personal assistant and only respond to my owner. :bow:",
@@ -38,6 +39,19 @@ async function resolveUser(client: App['client'], userId: string): Promise<strin
   } catch {
     return userId;
   }
+}
+
+const USER_MENTION_PATTERN = /<@(U[A-Z0-9]+)(?:\|[^>]*)?>/g;
+
+async function renderMentions(client: App['client'], text: string): Promise<string> {
+  const ids = new Set<string>();
+  for (const match of text.matchAll(USER_MENTION_PATTERN)) ids.add(match[1]!);
+  if (ids.size === 0) return text;
+  const resolved = await Promise.all(
+    [...ids].map(async (id) => [id, await resolveUser(client, id)] as const),
+  );
+  const nameById = new Map(resolved);
+  return text.replace(USER_MENTION_PATTERN, (_, uid) => `@${nameById.get(uid) ?? uid}`);
 }
 
 async function resolveChannel(client: App['client'], channelId: string): Promise<string> {
@@ -120,7 +134,8 @@ async function fetchThreadContext(
           : parent.bot_id
             ? 'bot'
             : 'unknown';
-        return `[thread context — parent message by ${author}]\n${parent.text}\n[end thread context]\n\n`;
+        const text = await renderMentions(client, parent.text);
+        return `[thread context — parent message by ${author}]\n${text}\n[end thread context]\n\n`;
       }
       return '';
     }
@@ -136,7 +151,8 @@ async function fetchThreadContext(
         : msg.bot_id
           ? 'you (bot)'
           : 'unknown';
-      lines.push(`${author}: ${msg.text ?? ''}`);
+      const text = await renderMentions(client, msg.text ?? '');
+      lines.push(`${author}: ${text}`);
     }
     return `[thread context — previous messages in this thread]\n${lines.join('\n')}\n[end thread context]\n\n`;
   } catch {
@@ -174,7 +190,7 @@ export function registerListeners(
   triggerEngine?: TriggerEngine,
   mentionTriggerEngine?: MentionTriggerEngine,
 ): void {
-  const { claudeCwd, claudeConfigDir, botName, allowedUserIds, maxTurns, ownerUserId } = config;
+  const { claudeCwd, claudeConfigDir, botName, allowedUserIds, maxTurns, ownerUserId, slackBotToken } = config;
   const queue = new MessageQueue();
   let botUserId: string | undefined;
 
@@ -277,7 +293,12 @@ export function registerListeners(
     }
 
     const userId = await ensureBotUserId(client);
-    const prompt = event.text.replace(new RegExp(`<@${userId}>`, 'g'), '').trim();
+    const basePrompt = event.text.replace(new RegExp(`<@${userId}>`, 'g'), '').trim();
+    const downloaded = await downloadSlackFiles(
+      ('files' in event ? (event.files as SlackFile[] | undefined) : undefined),
+      slackBotToken,
+    );
+    const prompt = basePrompt + buildFilesPromptSection(downloaded);
     if (!prompt) return;
 
     if (debug) {
@@ -413,7 +434,11 @@ export function registerListeners(
       const sessionKey = threadTs ?? channelId;
       const threadKey = `${channelId}:${sessionKey}`;
 
-      const prompt = event.text.trim();
+      const downloaded = await downloadSlackFiles(
+        ('files' in event ? (event.files as SlackFile[] | undefined) : undefined),
+        slackBotToken,
+      );
+      const prompt = event.text.trim() + buildFilesPromptSection(downloaded);
       if (!prompt) return;
 
       if (debug) {
@@ -443,24 +468,31 @@ export function registerListeners(
     const threadTs = ('thread_ts' in event ? event.thread_ts : undefined) as string | undefined;
     if (!threadTs || !senderId) return;
 
-    const existingSession = store.getSession(channelId, threadTs);
-    if (!existingSession) return;
-
-    const botId = await ensureBotUserId(client);
-    const participants = await getThreadParticipants(client, channelId, threadTs);
-    const humans = new Set([...participants].filter((id) => id !== botId));
-    if (humans.size !== 1 || !humans.has(senderId)) return;
-
-    const prompt = event.text.trim();
+    const downloaded = await downloadSlackFiles(
+      ('files' in event ? (event.files as SlackFile[] | undefined) : undefined),
+      slackBotToken,
+    );
+    const prompt = event.text.trim() + buildFilesPromptSection(downloaded);
     if (!prompt) return;
-
-    if (debug) {
-      const userName = await resolveUser(client, senderId);
-      console.log(`[thread-followup] user=${userName} thread=${threadTs} prompt="${prompt}"`);
-    }
 
     const threadKey = `${channelId}:${threadTs}`;
     queue.enqueue(threadKey, async () => {
+      // Check session inside the queue so a follow-up sent while the prior
+      // mention is still processing waits for that mention's session save
+      // before checking, instead of being silently dropped.
+      const existingSession = store.getSession(channelId, threadTs);
+      if (!existingSession) return;
+
+      const botId = await ensureBotUserId(client);
+      const participants = await getThreadParticipants(client, channelId, threadTs);
+      const humans = new Set([...participants].filter((id) => id !== botId));
+      if (humans.size !== 1 || !humans.has(senderId)) return;
+
+      if (debug) {
+        const userName = await resolveUser(client, senderId);
+        console.log(`[thread-followup] user=${userName} thread=${threadTs} prompt="${prompt}"`);
+      }
+
       await handleMessage(
         client,
         say,
