@@ -23,6 +23,9 @@ export const paths = {
   get LOG_DIR() {
     return join(this.DATA_DIR, 'logs');
   },
+  get UPLOADS_DIR() {
+    return join(this.DATA_DIR, 'uploads');
+  },
   get AUTOMATIONS_FILE() {
     return join(this.CONFIG_DIR, 'automations.yml');
   },
@@ -31,7 +34,7 @@ export const paths = {
 };
 
 export function ensureDirs(): void {
-  for (const dir of [paths.CONFIG_DIR, paths.DATA_DIR, paths.LOG_DIR]) {
+  for (const dir of [paths.CONFIG_DIR, paths.DATA_DIR, paths.LOG_DIR, paths.UPLOADS_DIR]) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
