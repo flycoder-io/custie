@@ -1,3 +1,4 @@
+import './logger';
 import {
   runStart,
   runSetup,
