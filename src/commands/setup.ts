@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
@@ -25,6 +26,85 @@ function error(msg: string): void {
 function mask(token: string): string {
   if (!token || token.length < 12) return '****';
   return token.slice(0, 8) + '...' + token.slice(-4);
+}
+
+// ─── Claude Code prerequisite check ─────────────────────────────────────────
+
+function hasClaudeBinary(): boolean {
+  try {
+    execFileSync('claude', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function defaultClaudeConfigDir(): string {
+  return process.env.CLAUDE_CONFIG_DIR || resolve(homedir(), '.claude');
+}
+
+function hasClaudeCredentials(configDir: string): boolean {
+  // Linux / Windows (and a fallback on macOS): credentials.json under the chosen config dir
+  if (existsSync(resolve(configDir, '.credentials.json'))) {
+    return true;
+  }
+  // macOS: credentials live in the login Keychain, independent of CLAUDE_CONFIG_DIR
+  if (process.platform === 'darwin') {
+    try {
+      execFileSync(
+        'security',
+        ['find-generic-password', '-s', 'Claude Code-credentials'],
+        { stdio: 'ignore' },
+      );
+      return true;
+    } catch {
+      // not in keychain
+    }
+  }
+  return false;
+}
+
+async function ensureClaudeCodeReady(): Promise<{ claudeConfigDir: string } | null> {
+  log('Step 0: Check Claude Code prerequisites\n');
+
+  if (!hasClaudeBinary()) {
+    error('Claude Code CLI not found on PATH.\n');
+    console.log('  Install it with:');
+    console.log('    \x1b[1mnpm install -g @anthropic-ai/claude-code\x1b[0m\n');
+    console.log('  Then run \x1b[1mclaude\x1b[0m once to sign in, and re-run \x1b[1mcustie setup\x1b[0m.');
+    return null;
+  }
+
+  const claudeConfigDir = await input({
+    message: 'Claude Code config directory',
+    default: defaultClaudeConfigDir(),
+  });
+
+  if (!hasClaudeCredentials(claudeConfigDir)) {
+    warn('Claude Code is installed but no credentials were found for this config.\n');
+    console.log(`  Looked for \x1b[1m${claudeConfigDir}/.credentials.json\x1b[0m` +
+      (process.platform === 'darwin' ? ' and the macOS Keychain.' : '.'));
+    console.log('  Custie spawns Claude Code as a subprocess. Without credentials, the bot');
+    console.log('  will prompt /login inside Slack at runtime and you cannot complete the');
+    console.log('  browser sign-in from there.\n');
+    if (claudeConfigDir !== resolve(homedir(), '.claude')) {
+      console.log('  Tip: run with the same CLAUDE_CONFIG_DIR you use for this Claude Code install:');
+      console.log(`    \x1b[1mCLAUDE_CONFIG_DIR=${claudeConfigDir} claude\x1b[0m\n`);
+    } else {
+      console.log('  Open a new terminal and run \x1b[1mclaude\x1b[0m to complete the sign-in flow,');
+      console.log('  then come back here.\n');
+    }
+
+    const proceed = await confirm({
+      message: 'Continue setup anyway?',
+      default: false,
+    });
+    if (!proceed) return null;
+  } else {
+    success('Claude Code is signed in.');
+  }
+
+  return { claudeConfigDir };
 }
 
 // ─── Manifest helper ────────────────────────────────────────────────────────
@@ -69,7 +149,6 @@ async function stepPersonalise(): Promise<PersonaliseResult> {
 interface AccessControlResult {
   ownerUserId: string;
   allowedUserIds: string;
-  claudeConfigDir: string;
 }
 
 interface SlackUser {
@@ -155,13 +234,7 @@ async function stepAccessControl(botToken: string): Promise<AccessControlResult>
     );
   }
 
-  const defaultConfigDir = resolve(homedir(), '.claude');
-  const claudeConfigDir = await input({
-    message: 'Claude config directory',
-    default: defaultConfigDir,
-  });
-
-  return { ownerUserId, allowedUserIds, claudeConfigDir };
+  return { ownerUserId, allowedUserIds };
 }
 
 // ─── Guided path: Step 2 — Manual token collection ──────────────────────────
@@ -588,6 +661,10 @@ export async function runSetup(args: string[]): Promise<void> {
   ensureDirs();
 
   try {
+    const prereq = await ensureClaudeCodeReady();
+    if (!prereq) return;
+    const { claudeConfigDir } = prereq;
+
     // Reconfigure check
     if (existsSync(paths.CONFIG_FILE)) {
       const reconfigure = await confirm({
@@ -645,7 +722,7 @@ export async function runSetup(args: string[]): Promise<void> {
     }
 
     // Step 3: Access control (shared)
-    const { ownerUserId, allowedUserIds, claudeConfigDir } = await stepAccessControl(tokens.botToken);
+    const { ownerUserId, allowedUserIds } = await stepAccessControl(tokens.botToken);
 
     // Write config
     writeConfigFile({
