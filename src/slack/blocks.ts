@@ -26,11 +26,22 @@ export type RichTextBlock = { type: 'rich_text'; elements: RichElement[] };
 const MESSAGE_TEXT_BUDGET = 2900;
 
 export function markdownToBlocks(md: string): RichTextBlock[] {
-  const tokens = marked.lexer(md);
+  const tokens = marked.lexer(normalizeSlackLinks(md));
   const elements: RichElement[] = [];
   for (const token of tokens) walkBlock(token, elements);
   if (elements.length === 0) return [];
   return chunkElements(elements);
+}
+
+// LLMs occasionally emit Slack mrkdwn link syntax `<URL|text>` inside what
+// should be markdown. marked then auto-detects the URL portion and swallows
+// the pipe into the href, which Slack later URL-encodes to `%7C` in the
+// rendered link. Rewrite to markdown `[text](URL)` first so marked produces
+// a proper link element with separate href and label.
+const SLACK_LINK_PATTERN = /<(https?:\/\/[^|\s>]+)\|([^>\n]+)>/g;
+
+export function normalizeSlackLinks(md: string): string {
+  return md.replace(SLACK_LINK_PATTERN, (_, url, label) => `[${label}](${url})`);
 }
 
 function chunkElements(elements: RichElement[]): RichTextBlock[] {
