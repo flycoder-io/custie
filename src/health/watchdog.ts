@@ -1,3 +1,5 @@
+import { lookup } from 'node:dns/promises';
+
 // Structural type instead of importing SocketModeClient — Bolt and the standalone
 // @slack/socket-mode package can resolve to two different copies in pnpm's tree.
 interface SocketLike {
@@ -15,19 +17,40 @@ export interface WatchdogOpts {
   // that emits no events. Default 5 minutes. Set to 0 to disable.
   probeIntervalMs?: number;
   authTest?: () => Promise<unknown>;
-  // Action to take when unhealthy. Default: exit(1).
-  onUnhealthy?: (reason: string) => void;
+  // Action to take when unhealthy. Default: exit(1) unless DNS is broken.
+  onUnhealthy?: (reason: string) => void | Promise<void>;
+  // Hostname used to detect transient network/DNS outages. When this fails to
+  // resolve at unhealthy-time we skip exit and keep waiting, since launchd
+  // would just respawn us into the same DNS failure. Default 'slack.com'.
+  dnsCheckHost?: string;
 }
 
 const ts = () => new Date().toISOString();
+
+async function isDnsBroken(host: string): Promise<boolean> {
+  try {
+    await lookup(host);
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 export function startWatchdog(opts: WatchdogOpts): { stop: () => void } {
   const unhealthyTimeoutMs = opts.unhealthyTimeoutMs ?? 5 * 60 * 1000;
   const startupTimeoutMs = opts.startupTimeoutMs ?? 5 * 60 * 1000;
   const probeIntervalMs = opts.probeIntervalMs ?? 5 * 60 * 1000;
+  const dnsCheckHost = opts.dnsCheckHost ?? 'slack.com';
   const onUnhealthy =
     opts.onUnhealthy ??
-    ((reason: string) => {
+    (async (reason: string) => {
+      if (await isDnsBroken(dnsCheckHost)) {
+        console.warn(
+          `[${ts()}] [watchdog] ${reason} — DNS for ${dnsCheckHost} is unresolved, staying alive and waiting for network`,
+        );
+        armUnhealthyTimer(reason);
+        return;
+      }
       console.error(`[${ts()}] [watchdog] UNHEALTHY: ${reason} — exiting for launchd to respawn`);
       process.exit(1);
     });
