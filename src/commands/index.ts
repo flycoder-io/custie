@@ -6,6 +6,6 @@ export * from './install';
 export * from './uninstall';
 export * from './upgrade';
 export * from './automation';
-export * from './pause';
+export * from './stop';
 export * from './logs';
 export * from './slack';
