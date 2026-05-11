@@ -51,6 +51,7 @@ export class MentionTriggerEngine {
       const targetUser = this.resolveTargetUser(t);
       if (!targetUser) continue;
       if (!event.text.includes(`<@${targetUser}>`)) continue;
+      if (event.senderId === targetUser) continue;
 
       const includeThreads = t.include_thread_replies ?? true;
       if (isThreadReply && !includeThreads) continue;
@@ -134,6 +135,18 @@ export async function fireMentionTrigger(
     // Keep channelId as label
   }
 
+  // Resolve permalink to the mention message so the summary can link back.
+  let permalink: string | undefined;
+  try {
+    const res = await client.chat.getPermalink({
+      channel: channelId,
+      message_ts: ts,
+    });
+    permalink = res.permalink;
+  } catch (err) {
+    console.warn(`[mention-trigger:${trigger.name}] getPermalink failed:`, err);
+  }
+
   // Format thread for the prompt.
   const formatted = messages
     .map((m) => {
@@ -149,6 +162,7 @@ export async function fireMentionTrigger(
 
   const promptBody =
     `Source channel: ${channelLabel}\n` +
+    `Permalink: ${permalink ?? '(unavailable)'}\n` +
     `Triggered by: ${event.senderId ? displayNameFor(event.senderId) : 'unknown'}\n` +
     `Thread (${messages.length} message${messages.length === 1 ? '' : 's'}):\n` +
     `\n${formatted}\n\n` +
