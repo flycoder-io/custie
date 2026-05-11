@@ -12,6 +12,7 @@ import {
   ensureUsersCached,
   displayNameFor,
 } from '../store/user-cache';
+import { markdownToBlocks, blockToFallbackText } from '../slack/blocks';
 
 const USAGE = `
   Usage: custie slack <subcommand> [options]
@@ -22,7 +23,7 @@ const USAGE = `
     channel-info <name-or-id>       Show channel details
     user-info <name-or-id>          Show user details
     history <name-or-id>            Show recent channel messages
-    post --channel <ch> --text <t>  Post a message to a channel
+    post --channel <ch> --text <t> [--thread <ts>] [--markdown]  Post a message (--markdown converts standard markdown to Slack Block Kit)
     delete --channel <ch> --ts <t>  Delete a bot message
 
   Options:
@@ -189,6 +190,7 @@ async function postMessage(client: WebClient, args: string[]): Promise<void> {
   const channelArg = getArg(args, '--channel');
   const text = getArg(args, '--text');
   const threadTs = getArg(args, '--thread');
+  const markdown = args.includes('--markdown');
 
   if (!channelArg || !text) {
     console.error('--channel and --text are required');
@@ -210,6 +212,24 @@ async function postMessage(client: WebClient, args: string[]): Promise<void> {
       process.exit(1);
     }
     channelId = match.id!;
+  }
+
+  if (markdown) {
+    const blocks = markdownToBlocks(text);
+    if (blocks.length > 0) {
+      let lastTs: string | undefined;
+      for (const block of blocks) {
+        const result = await client.chat.postMessage({
+          channel: channelId,
+          text: blockToFallbackText(block),
+          blocks: [block],
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        });
+        lastTs = result.ts;
+      }
+      console.log(`Message posted to #${channelArg} (ts: ${lastTs})`);
+      return;
+    }
   }
 
   const postResult = await client.chat.postMessage({
