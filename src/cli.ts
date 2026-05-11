@@ -8,8 +8,8 @@ import {
   runConfig,
   runUpgrade,
   runAutomationCmd,
-  runPause,
-  runResume,
+  runStop,
+  runRestart,
   runLogs,
   runSlackCmd,
 } from './commands';
@@ -22,8 +22,8 @@ const USAGE = `
     setup        Interactive first-time setup (guided or browser-automated)
     install      Install as a system service (launchd / systemd)
     uninstall    Remove the system service
-    pause        Temporarily stop the service (without uninstalling)
-    resume       Restart a paused service
+    stop         Stop the service (without uninstalling)
+    restart      Restart the service
     logs         Tail the service log (-e for error log)
     upgrade      Upgrade custie to the latest version
     prompt       Edit the system prompt in $EDITOR
@@ -59,13 +59,12 @@ async function main(): Promise<void> {
       await runUninstall();
       break;
 
-    case 'pause':
-    case 'halt':
-      await runPause();
+    case 'stop':
+      await runStop();
       break;
 
-    case 'resume':
-      await runResume();
+    case 'restart':
+      await runRestart();
       break;
 
     case 'logs':

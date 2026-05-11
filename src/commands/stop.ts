@@ -17,23 +17,23 @@ function warn(msg: string): void {
   console.log(`\x1b[33m!\x1b[0m ${msg}`);
 }
 
-export async function runPause(): Promise<void> {
+export async function runStop(): Promise<void> {
   const os = platform();
 
   if (os === 'darwin') {
     const plistPath = join(homedir(), 'Library', 'LaunchAgents', PLIST_NAME);
-    log('Pausing Custie service...');
+    log('Stopping Custie service...');
     try {
       execSync(`launchctl unload "${plistPath}"`, { stdio: 'pipe' });
-      success('Service paused. Run `custie resume` to restart.');
+      success('Service stopped. Run `custie restart` to start again.');
     } catch {
       warn('Service is not currently loaded.');
     }
   } else if (os === 'linux') {
-    log('Pausing Custie service...');
+    log('Stopping Custie service...');
     try {
       execSync(`systemctl --user stop ${SYSTEMD_SERVICE}`, { stdio: 'pipe' });
-      success('Service paused. Run `custie resume` to restart.');
+      success('Service stopped. Run `custie restart` to start again.');
     } catch {
       warn('Service is not currently running.');
     }
@@ -42,25 +42,30 @@ export async function runPause(): Promise<void> {
   }
 }
 
-export async function runResume(): Promise<void> {
+export async function runRestart(): Promise<void> {
   const os = platform();
 
   if (os === 'darwin') {
     const plistPath = join(homedir(), 'Library', 'LaunchAgents', PLIST_NAME);
-    log('Resuming Custie service...');
+    log('Restarting Custie service...');
+    try {
+      execSync(`launchctl unload "${plistPath}"`, { stdio: 'pipe' });
+    } catch {
+      // Service may not be loaded — load will start it fresh.
+    }
     try {
       execSync(`launchctl load "${plistPath}"`, { stdio: 'pipe' });
-      success('Service resumed.');
+      success('Service restarted.');
     } catch {
-      warn('Failed to resume. Is the service installed? Run `custie install` first.');
+      warn('Failed to restart. Is the service installed? Run `custie install` first.');
     }
   } else if (os === 'linux') {
-    log('Resuming Custie service...');
+    log('Restarting Custie service...');
     try {
-      execSync(`systemctl --user start ${SYSTEMD_SERVICE}`, { stdio: 'pipe' });
-      success('Service resumed.');
+      execSync(`systemctl --user restart ${SYSTEMD_SERVICE}`, { stdio: 'pipe' });
+      success('Service restarted.');
     } catch {
-      warn('Failed to resume. Is the service installed? Run `custie install` first.');
+      warn('Failed to restart. Is the service installed? Run `custie install` first.');
     }
   } else {
     warn(`Unsupported platform: ${os}`);
