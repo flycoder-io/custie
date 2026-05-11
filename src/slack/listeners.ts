@@ -190,7 +190,7 @@ export function registerListeners(
   triggerEngine?: TriggerEngine,
   mentionTriggerEngine?: MentionTriggerEngine,
 ): void {
-  const { claudeCwd, claudeConfigDir, botName, allowedUserIds, maxTurns, ownerUserId, slackBotToken } = config;
+  const { claudeCwd, claudeConfigDir, botName, allowedUserIds, maxTurns, ownerUserId, slackBotToken, autoRespondChannelIds } = config;
   const queue = new MessageQueue();
   let botUserId: string | undefined;
 
@@ -427,9 +427,18 @@ export function registerListeners(
       | string
       | undefined;
     const isDM = channelType === 'im';
+    const isAutoRespondChannel = autoRespondChannelIds.has(channelId);
 
-    // DMs: every message starts or continues a session (keyed by channel)
-    if (isDM) {
+    // Outside DMs, Slack also fires `app_mention` for messages that @ the bot.
+    // Skip here so app_mention is the sole handler — otherwise we double-process.
+    if (!isDM) {
+      const botId = await ensureBotUserId(client);
+      if (event.text.includes(`<@${botId}>`)) return;
+    }
+
+    // DMs and auto-respond channels: every message starts or continues a session
+    // (keyed by channel for top-level, by thread for thread replies)
+    if (isDM || isAutoRespondChannel) {
       const threadTs = ('thread_ts' in event ? event.thread_ts : undefined) as string | undefined;
       const sessionKey = threadTs ?? channelId;
       const threadKey = `${channelId}:${sessionKey}`;

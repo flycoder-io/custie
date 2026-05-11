@@ -13,6 +13,7 @@ export interface Config {
   allowedUserIds: Set<string>;
   maxTurns: number;
   ownerUserId?: string;
+  autoRespondChannelIds: Set<string>;
 }
 
 /**
@@ -54,6 +55,10 @@ export function loadConfig(): Config {
     allowedUserIds.add(ownerUserId);
   }
 
+  const autoRespondChannelIds = new Set(
+    (process.env['AUTO_RESPOND_CHANNEL_IDS'] ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  );
+
   return {
     slackBotToken: requireEnv('SLACK_BOT_TOKEN'),
     slackAppToken: requireEnv('SLACK_APP_TOKEN'),
@@ -64,5 +69,6 @@ export function loadConfig(): Config {
     allowedUserIds,
     maxTurns: parseInt(process.env['MAX_TURNS'] ?? '10', 10),
     ownerUserId,
+    autoRespondChannelIds,
   };
 }
