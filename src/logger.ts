@@ -1,4 +1,6 @@
 // Prefix every console line with an ISO timestamp so logs stay debuggable.
+// Skipped for interactive TTYs so CLI output (help text, prompts) stays clean;
+// only applies when stdout/stderr are redirected (e.g. launchd / systemd logs).
 // Idempotent: lines that already start with [YYYY-...] are passed through
 // untouched (e.g. the explicit `[${ts()}]` calls in index.ts).
 
@@ -21,7 +23,11 @@ function withTimestamp(write: (chunk: string) => boolean): (chunk: string | Uint
   };
 }
 
-const stdoutWrite = process.stdout.write.bind(process.stdout);
-const stderrWrite = process.stderr.write.bind(process.stderr);
-process.stdout.write = withTimestamp(stdoutWrite) as typeof process.stdout.write;
-process.stderr.write = withTimestamp(stderrWrite) as typeof process.stderr.write;
+if (!process.stdout.isTTY) {
+  const stdoutWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = withTimestamp(stdoutWrite) as typeof process.stdout.write;
+}
+if (!process.stderr.isTTY) {
+  const stderrWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = withTimestamp(stderrWrite) as typeof process.stderr.write;
+}
