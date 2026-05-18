@@ -238,7 +238,14 @@ export function registerListeners(
         claudeConfigDir,
         sessionId,
       );
-      store.saveSession(channelId, sessionKey, response.sessionId);
+      if (response.isError) {
+        // The CLI persists the failed turn into the session file, so any
+        // future --resume on this session would replay the bad turn and fail
+        // again. Drop the session so the next message starts fresh.
+        store.deleteSession(channelId, sessionKey);
+      } else {
+        store.saveSession(channelId, sessionKey, response.sessionId);
+      }
 
       const blocks = markdownToBlocks(response.text);
       const messages = blocks.length > 0
