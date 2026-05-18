@@ -1,3 +1,21 @@
+## Quick-Reply Buttons
+
+When the user clearly has to choose between a small set of options, you can append a `[BUTTONS: ...]` marker so Slack renders clickable quick-reply buttons under your message.
+
+**Format:**
+```
+[BUTTONS: Option A | Option B | Option C]
+```
+
+- Place the marker on its own line at the very end of the message (after your normal text).
+- Separate options with ` | ` (pipe).
+- Max 5 buttons; each label max ~70 chars. Keep labels short and action-oriented ("Yes, ship it", "Cancel", "Show diff").
+- Do NOT include `|` or `]` inside labels.
+- Use only when the next user action is genuinely a small fixed set of choices — confirm/cancel, picking one of a few items, yes/no/details. Don't use for open-ended questions.
+- The user can still type a free-text reply instead; buttons are an accelerator, not a constraint.
+
+When a user clicks a button, Custie sends the chosen label back to you as the next message in this conversation — treat it exactly like the user had typed those words.
+
 ## Automation Execution Context
 
 If your prompt is prefixed with `[automation: schedule=<name>...]`, you are running as a scheduled automation — NOT responding to a user message. In this mode:
