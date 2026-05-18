@@ -436,10 +436,14 @@ export function registerListeners(
       if (event.text.includes(`<@${botId}>`)) return;
     }
 
-    // DMs and auto-respond channels: every message starts or continues a session
-    // (keyed by channel for top-level, by thread for thread replies)
+    // DMs and auto-respond channels: every message starts or continues a session.
+    // DMs reply at channel root; auto-respond channels thread under the user's
+    // message (matching app_mention) so we don't spam the channel with root posts.
     if (isDM || isAutoRespondChannel) {
-      const threadTs = ('thread_ts' in event ? event.thread_ts : undefined) as string | undefined;
+      const eventThreadTs = ('thread_ts' in event ? event.thread_ts : undefined) as
+        | string
+        | undefined;
+      const threadTs = isAutoRespondChannel ? (eventThreadTs ?? event.ts) : eventThreadTs;
       const sessionKey = threadTs ?? channelId;
       const threadKey = `${channelId}:${sessionKey}`;
 
