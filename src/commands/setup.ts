@@ -383,8 +383,17 @@ async function stepBrowserTokens(botName: string): Promise<TokenResult> {
     const page = context.pages()[0] || (await context.newPage());
 
     await page.goto('https://api.slack.com/apps');
+    // Slack labels this button "Create New App" when the account already has
+    // apps and "Create an App" on the empty-state page — match either, since
+    // its presence is our signal that we've reached the authenticated apps
+    // dashboard. Matching only one text leaves login detection stuck.
     const createBtn = page.locator(
-      'a:has-text("Create New App"), button:has-text("Create New App")',
+      [
+        'a:has-text("Create New App")',
+        'button:has-text("Create New App")',
+        'a:has-text("Create an App")',
+        'button:has-text("Create an App")',
+      ].join(', '),
     );
     const isLoggedIn = await createBtn
       .first()
