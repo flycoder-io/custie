@@ -4,6 +4,7 @@ export * from './config';
 export * from './setup';
 export * from './install';
 export * from './uninstall';
+export * from './profiles';
 export * from './upgrade';
 export * from './automation';
 export * from './stop';

@@ -2,9 +2,8 @@ import { unlinkSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { homedir, platform } from 'node:os';
-
-const PLIST_NAME = 'io.flycoder.custie.plist';
-const SYSTEMD_SERVICE = 'custie.service';
+import { getProfile } from '../profile';
+import { plistPath, systemdUnitName } from '../service';
 
 function log(msg: string): void {
   console.log(`\n\x1b[36m>\x1b[0m ${msg}`);
@@ -24,28 +23,30 @@ function run(cmd: string): void {
 
 export async function runUninstall(): Promise<void> {
   const os = platform();
+  const profile = getProfile();
   log('Uninstalling Custie service...');
 
   if (os === 'darwin') {
-    const plistPath = join(homedir(), 'Library', 'LaunchAgents', PLIST_NAME);
+    const plist = plistPath(profile);
     try {
-      run(`launchctl unload "${plistPath}"`);
+      run(`launchctl unload "${plist}"`);
     } catch {
       /* not loaded */
     }
     try {
-      unlinkSync(plistPath);
+      unlinkSync(plist);
     } catch {
       /* not present */
     }
     success('LaunchAgent removed.');
   } else if (os === 'linux') {
+    const unitName = systemdUnitName(profile);
     try {
-      run('systemctl --user disable --now custie');
+      run(`systemctl --user disable --now ${unitName}`);
     } catch {
       /* not active */
     }
-    const unitPath = join(homedir(), '.config', 'systemd', 'user', SYSTEMD_SERVICE);
+    const unitPath = join(homedir(), '.config', 'systemd', 'user', `${unitName}.service`);
     try {
       unlinkSync(unitPath);
     } catch {

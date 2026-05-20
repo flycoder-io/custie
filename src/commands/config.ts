@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { paths, ensureDirs } from '../paths';
 import { loadEnvFiles } from '../config';
+import { getProfile } from '../profile';
 
 function maskToken(value: string): string {
   if (!value || value.length < 12) return '****';
@@ -17,6 +18,7 @@ function isSensitive(key: string): boolean {
 function printConfig(): void {
   loadEnvFiles();
 
+  console.log(`\n  Profile:      ${getProfile()}`);
   console.log('\n  Paths:');
   console.log(`    Config dir:   ${paths.CONFIG_DIR}`);
   console.log(`    Data dir:     ${paths.DATA_DIR}`);
