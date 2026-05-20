@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { getProfile } from '../profile';
-import { plistPath, systemdUnitName } from '../service';
+import { plistPath, systemdUnitName, isServiceInstalled, restartService } from '../service';
 
 function log(msg: string): void {
   console.log(`\n\x1b[36m>\x1b[0m ${msg}`);
@@ -43,31 +43,21 @@ export async function runStop(): Promise<void> {
 
 export async function runRestart(): Promise<void> {
   const os = platform();
-  const profile = getProfile();
-
-  if (os === 'darwin') {
-    const plist = plistPath(profile);
-    log('Restarting Custie service...');
-    try {
-      execSync(`launchctl unload "${plist}"`, { stdio: 'pipe' });
-    } catch {
-      // Service may not be loaded — load will start it fresh.
-    }
-    try {
-      execSync(`launchctl load "${plist}"`, { stdio: 'pipe' });
-      success('Service restarted.');
-    } catch {
-      warn('Failed to restart. Is the service installed? Run `custie install` first.');
-    }
-  } else if (os === 'linux') {
-    log('Restarting Custie service...');
-    try {
-      execSync(`systemctl --user restart ${systemdUnitName(profile)}`, { stdio: 'pipe' });
-      success('Service restarted.');
-    } catch {
-      warn('Failed to restart. Is the service installed? Run `custie install` first.');
-    }
-  } else {
+  if (os !== 'darwin' && os !== 'linux') {
     warn(`Unsupported platform: ${os}`);
+    return;
+  }
+
+  const profile = getProfile();
+  if (!isServiceInstalled(profile)) {
+    warn(`No service installed for profile "${profile}". Run \`custie install\` first.`);
+    return;
+  }
+
+  log('Restarting Custie service...');
+  if (restartService(profile)) {
+    success('Service restarted.');
+  } else {
+    warn('Failed to restart. Try `custie install` to reinstall the service.');
   }
 }

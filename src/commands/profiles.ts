@@ -6,7 +6,7 @@ import { paths } from '../paths';
 import { serviceLabel, systemdUnitName } from '../service';
 
 /** All profile names: `default` plus every directory under PROFILES_DIR. */
-function listProfiles(): string[] {
+export function listProfiles(): string[] {
   const profiles = ['default'];
   if (existsSync(paths.PROFILES_DIR)) {
     for (const entry of readdirSync(paths.PROFILES_DIR)) {
