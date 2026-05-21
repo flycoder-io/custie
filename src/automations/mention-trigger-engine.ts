@@ -1,6 +1,7 @@
 import type { App } from '@slack/bolt';
 import type { MentionTrigger } from './config';
 import { runAutomation } from './runner';
+import { resolveCwd } from '../channels';
 import { displayNameFor, ensureUsersCached } from '../store/user-cache';
 
 export interface MentionTriggerEngineOpts {
@@ -172,7 +173,7 @@ export async function fireMentionTrigger(
     name: trigger.name,
     prompt: promptBody,
     channel: trigger.target_channel,
-    cwd: config.claudeCwd,
+    cwd: resolveCwd(undefined, trigger.target_channel, config.claudeCwd),
     botName: config.botName,
     maxTurns: config.maxTurns,
     claudeConfigDir: config.claudeConfigDir,
