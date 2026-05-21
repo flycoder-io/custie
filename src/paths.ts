@@ -53,6 +53,9 @@ export const paths = {
   get AUTOMATIONS_FILE() {
     return join(this.CONFIG_DIR, 'automations.yml');
   },
+  get CHANNELS_FILE() {
+    return join(this.CONFIG_DIR, 'channels.yml');
+  },
 
   PACKAGE_ROOT: resolve(import.meta.dirname, '..'),
 };
