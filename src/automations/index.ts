@@ -2,8 +2,9 @@ import { watch, type FSWatcher } from 'node:fs';
 import type { App } from '@slack/bolt';
 import type { Config } from '../config';
 import { paths } from '../paths';
+import { refreshChannelRegistry, resolveCwd } from '../channels';
 import type { AutomationRunStore } from '../store/automation-run-store';
-import { loadAutomations } from './config';
+import { loadEffectiveAutomations } from './config';
 import { runAutomation } from './runner';
 import { AutomationManager } from './manager';
 import { Scheduler } from './scheduler';
@@ -34,9 +35,13 @@ export function initAutomations(
   const triggerEngine = new TriggerEngine();
   const mentionTriggerEngine = new MentionTriggerEngine({ ownerUserId: config.ownerUserId });
   let watcher: FSWatcher | undefined;
+  let channelsWatcher: FSWatcher | undefined;
 
   function reload(): void {
-    const automations = loadAutomations();
+    // Refresh the channel registry first so resolveCwd() and the merged
+    // automation loader see the latest channels.yml.
+    refreshChannelRegistry();
+    const automations = loadEffectiveAutomations();
 
     // Re-register all schedules
     scheduler.unregisterAll();
@@ -47,7 +52,7 @@ export function initAutomations(
           name: schedule.name,
           prompt: schedule.prompt,
           channel: schedule.channel,
-          cwd: schedule.cwd ?? config.claudeCwd,
+          cwd: resolveCwd(schedule.cwd, schedule.channel, config.claudeCwd),
           botName: config.botName,
           maxTurns: config.maxTurns,
           claudeConfigDir: config.claudeConfigDir,
@@ -73,16 +78,24 @@ export function initAutomations(
 
   reload();
 
-  // Watch YAML file for external changes (e.g. git pull, manual edit)
+  // Watch YAML files for external changes (e.g. git pull, manual edit).
+  // Both automations.yml and channels.yml trigger the same debounced reload(),
+  // which also refreshes the channel registry.
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleReload = (label: string) => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      console.log(`[automations] ${label} changed, reloading...`);
+      reload();
+    }, 500);
+  };
   try {
-    watcher = watch(paths.AUTOMATIONS_FILE, () => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        console.log('[automations] Config file changed, reloading...');
-        reload();
-      }, 500);
-    });
+    watcher = watch(paths.AUTOMATIONS_FILE, () => scheduleReload('automations.yml'));
+  } catch {
+    // File may not exist yet — that's fine, watcher is optional
+  }
+  try {
+    channelsWatcher = watch(paths.CHANNELS_FILE, () => scheduleReload('channels.yml'));
   } catch {
     // File may not exist yet — that's fine, watcher is optional
   }
@@ -94,6 +107,7 @@ export function initAutomations(
     mentionTriggerEngine,
     shutdown: () => {
       watcher?.close();
+      channelsWatcher?.close();
       clearTimeout(debounceTimer);
       scheduler.unregisterAll();
     },

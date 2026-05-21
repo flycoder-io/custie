@@ -8,6 +8,7 @@ import {
 } from '../automations/mention-trigger-engine';
 import { askClaude } from '../claude/agent';
 import { runAutomation } from '../automations/runner';
+import { resolveCwd } from '../channels';
 import { MessageQueue } from '../queue/message-queue';
 import { toSlackMarkdown, splitMessage } from './formatters';
 import { markdownToBlocks, blockToFallbackText } from './blocks';
@@ -235,9 +236,13 @@ export function registerListeners(
         ']\n\n';
       const enrichedPrompt = contextPrefix + prompt;
 
+      // Interactive messages have no explicit cwd, so this resolves to
+      // channels[channelId].cwd ?? CLAUDE_CWD.
+      const cwd = resolveCwd(undefined, channelId, claudeCwd);
+
       const response = await askClaude(
         enrichedPrompt,
-        claudeCwd,
+        cwd,
         botName,
         maxTurns,
         claudeConfigDir,
@@ -373,7 +378,7 @@ export function registerListeners(
           name: matched.name,
           prompt: `Context: A user said "${event.text}" in this channel.\n\n${matched.prompt}`,
           channel: event.channel,
-          cwd: config.claudeCwd,
+          cwd: resolveCwd(undefined, event.channel, config.claudeCwd),
           botName: config.botName,
           maxTurns: config.maxTurns,
           claudeConfigDir: config.claudeConfigDir,
