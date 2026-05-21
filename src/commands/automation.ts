@@ -211,6 +211,7 @@ async function handleRun(manager: AutomationManager, name: string): Promise<void
     maxTurns: config.maxTurns,
     claudeConfigDir: config.claudeConfigDir,
     slackClient: client,
+    silent: automation.silent,
   });
   console.log('Done.');
 }

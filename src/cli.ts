@@ -12,7 +12,9 @@ import {
   runRestart,
   runLogs,
   runSlackCmd,
+  runProfiles,
 } from './commands';
+import { getProfile } from './profile';
 
 const USAGE = `
   Usage: custie <command> [options]
@@ -30,16 +32,50 @@ const USAGE = `
     config       Show resolved config (--edit to edit, --path for file path)
     automation   Manage scheduled tasks and triggers
     slack        Query Slack (channels, users, post messages)
+    profiles     List instances and their service status
 
   Options:
-    -h, --help      Show this help message
-    -v, --version   Show version number
+    -p, --profile <name>   Target a named instance (default: the unnamed instance)
+    -h, --help             Show this help message
+    -v, --version          Show version number
 `;
 
 declare const __VERSION__: string;
 
+/**
+ * Pull `--profile <name>` / `-p <name>` (and `=` forms) out of the argument
+ * list wherever they appear, so every command transparently supports it. The
+ * resolved name is published via `CUSTIE_PROFILE` for `paths` and `service`.
+ */
+function extractProfileFlag(argv: string[]): { profile?: string; args: string[] } {
+  const args: string[] = [];
+  let profile: string | undefined;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === '--profile' || arg === '-p') {
+      profile = argv[i + 1];
+      i++;
+    } else if (arg.startsWith('--profile=')) {
+      profile = arg.slice('--profile='.length);
+    } else if (arg.startsWith('-p=')) {
+      profile = arg.slice('-p='.length);
+    } else {
+      args.push(arg);
+    }
+  }
+
+  return { profile, args };
+}
+
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+  const { profile, args } = extractProfileFlag(process.argv.slice(2));
+  if (profile) {
+    process.env['CUSTIE_PROFILE'] = profile;
+  }
+  // Validate early so an invalid --profile fails fast with a clear message.
+  getProfile();
+
   const command = args[0];
 
   switch (command) {
@@ -89,6 +125,10 @@ async function main(): Promise<void> {
 
     case 'slack':
       await runSlackCmd(args.slice(1));
+      break;
+
+    case 'profiles':
+      await runProfiles();
       break;
 
     case '-v':

@@ -12,6 +12,11 @@ import { MessageQueue } from '../queue/message-queue';
 import { toSlackMarkdown, splitMessage } from './formatters';
 import { markdownToBlocks, blockToFallbackText } from './blocks';
 import { downloadSlackFiles, buildFilesPromptSection, type SlackFile } from './file-downloader';
+import {
+  extractButtons,
+  buildActionsBlock,
+  BUTTON_ACTION_ID_PREFIX,
+} from './buttons';
 
 const REJECT_MESSAGES = [
   "Sorry, I'm a personal assistant and only respond to my owner. :bow:",
@@ -238,16 +243,39 @@ export function registerListeners(
         claudeConfigDir,
         sessionId,
       );
-      store.saveSession(channelId, sessionKey, response.sessionId);
+      if (response.isError) {
+        // The CLI persists the failed turn into the session file, so any
+        // future --resume on this session would replay the bad turn and fail
+        // again. Drop the session so the next message starts fresh.
+        store.deleteSession(channelId, sessionKey);
+      } else {
+        store.saveSession(channelId, sessionKey, response.sessionId);
+      }
 
-      const blocks = markdownToBlocks(response.text);
-      const messages = blocks.length > 0
-        ? blocks.map((b) => ({ blocks: [b], text: blockToFallbackText(b) }))
-        : splitMessage(toSlackMarkdown(response.text)).map((text) => ({ text }));
+      const { cleanedText, buttons } = extractButtons(response.text);
+      const actionsBlock = buttons ? buildActionsBlock(buttons) : null;
+
+      const rtBlocks = markdownToBlocks(cleanedText);
+      const messages: Array<{ text: string; blocks?: unknown[] }> = rtBlocks.length > 0
+        ? rtBlocks.map((b) => ({ blocks: [b] as unknown[], text: blockToFallbackText(b) }))
+        : splitMessage(toSlackMarkdown(cleanedText)).map((text) => ({ text }));
+
+      if (actionsBlock) {
+        const last = messages[messages.length - 1]!;
+        if (last.blocks) {
+          last.blocks.push(actionsBlock);
+        } else {
+          // Plain-text branch — promote to blocks so the actions block has somewhere to attach.
+          last.blocks = [
+            { type: 'section', text: { type: 'mrkdwn', text: last.text || ' ' } },
+            actionsBlock,
+          ];
+        }
+      }
 
       if (debug) {
         console.log(
-          `[response] length=${response.text.length} messages=${messages.length}`,
+          `[response] length=${response.text.length} messages=${messages.length} buttons=${buttons?.length ?? 0}`,
         );
       }
 
@@ -257,7 +285,7 @@ export function registerListeners(
         channel: channelId,
         ts: typingMsg.ts,
         text: first.text,
-        ...('blocks' in first ? { blocks: first.blocks } : {}),
+        ...(first.blocks ? { blocks: first.blocks as never } : {}),
       });
 
       // Post remaining chunks as new messages
@@ -265,9 +293,9 @@ export function registerListeners(
         const m = messages[i]!;
         await say({
           text: m.text,
-          ...('blocks' in m ? { blocks: m.blocks } : {}),
+          ...(m.blocks ? { blocks: m.blocks as never } : {}),
           ...(threadTs ? { thread_ts: threadTs } : {}),
-        });
+        } as never);
       }
     } catch (err) {
       console.error('[listener] Error handling message:', err);
@@ -436,10 +464,14 @@ export function registerListeners(
       if (event.text.includes(`<@${botId}>`)) return;
     }
 
-    // DMs and auto-respond channels: every message starts or continues a session
-    // (keyed by channel for top-level, by thread for thread replies)
+    // DMs and auto-respond channels: every message starts or continues a session.
+    // DMs reply at channel root; auto-respond channels thread under the user's
+    // message (matching app_mention) so we don't spam the channel with root posts.
     if (isDM || isAutoRespondChannel) {
-      const threadTs = ('thread_ts' in event ? event.thread_ts : undefined) as string | undefined;
+      const eventThreadTs = ('thread_ts' in event ? event.thread_ts : undefined) as
+        | string
+        | undefined;
+      const threadTs = isAutoRespondChannel ? (eventThreadTs ?? event.ts) : eventThreadTs;
       const sessionKey = threadTs ?? channelId;
       const threadKey = `${channelId}:${sessionKey}`;
 
@@ -514,4 +546,77 @@ export function registerListeners(
       );
     });
   });
+
+  // Quick-reply button clicks. Strip the actions block from the original
+  // message, leave a "✓ Selected: X" context line, then feed the choice
+  // back into the same Claude session as if the user had typed it.
+  app.action(
+    new RegExp(`^${BUTTON_ACTION_ID_PREFIX}`),
+    async ({ body, ack, client }) => {
+      await ack();
+
+      if (body.type !== 'block_actions') return;
+      const action = body.actions?.[0];
+      if (!action || action.type !== 'button') return;
+
+      const userId = body.user?.id;
+      if (allowedUserIds.size > 0 && (!userId || !allowedUserIds.has(userId))) return;
+
+      const channelId = body.channel?.id;
+      const message = body.message as
+        | { ts: string; thread_ts?: string; blocks?: Array<{ type: string; block_id?: string }>; text?: string }
+        | undefined;
+      if (!channelId || !message) return;
+
+      const choice = (action.value ?? action.text?.text ?? '').trim();
+      if (!choice) return;
+
+      const threadTs = message.thread_ts;
+      const sessionKey = threadTs ?? channelId;
+      const threadKey = `${channelId}:${sessionKey}`;
+
+      // Rebuild message blocks without the actions block, and append a
+      // context block showing the selection so the thread reads naturally.
+      const remainingBlocks = (message.blocks ?? []).filter(
+        (b) => !(b.type === 'actions' && b.block_id?.startsWith('custie_buttons')),
+      );
+      const selectedBlock = {
+        type: 'context',
+        elements: [{ type: 'mrkdwn', text: `✓ Selected: *${choice}*` }],
+      };
+      try {
+        await client.chat.update({
+          channel: channelId,
+          ts: message.ts,
+          text: message.text ?? choice,
+          blocks: [...remainingBlocks, selectedBlock] as never,
+        });
+      } catch (err) {
+        if (debug) console.log('[button] failed to strip actions block:', err);
+      }
+
+      const sayInThread = async (msg: { text: string; thread_ts?: string }) => {
+        await client.chat.postMessage({ channel: channelId, ...msg });
+      };
+
+      queue.enqueue(threadKey, async () => {
+        const session = store.getSession(channelId, sessionKey);
+        if (debug) {
+          console.log(
+            `[button] user=${userId} channel=${channelId} thread=${threadTs ?? '(root)'} choice="${choice}" resume=${session?.sessionId ?? 'none'}`,
+          );
+        }
+        await handleMessage(
+          client,
+          sayInThread,
+          channelId,
+          sessionKey,
+          choice,
+          userId,
+          session?.sessionId,
+          threadTs,
+        );
+      });
+    },
+  );
 }
