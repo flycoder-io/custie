@@ -383,8 +383,17 @@ async function stepBrowserTokens(botName: string): Promise<TokenResult> {
     const page = context.pages()[0] || (await context.newPage());
 
     await page.goto('https://api.slack.com/apps');
+    // Slack labels this button "Create New App" when the account already has
+    // apps and "Create an App" on the empty-state page — match either, since
+    // its presence is our signal that we've reached the authenticated apps
+    // dashboard. Matching only one text leaves login detection stuck.
     const createBtn = page.locator(
-      'a:has-text("Create New App"), button:has-text("Create New App")',
+      [
+        'a:has-text("Create New App")',
+        'button:has-text("Create New App")',
+        'a:has-text("Create an App")',
+        'button:has-text("Create an App")',
+      ].join(', '),
     );
     const isLoggedIn = await createBtn
       .first()
@@ -479,36 +488,43 @@ async function stepBrowserTokens(botName: string): Promise<TokenResult> {
     console.log('  \x1b[1mPlease click "Install to Workspace", then click "Allow".\x1b[0m\n');
     await page.goto(installUrl);
 
-    // Install may open a new tab for OAuth — watch all pages for success
-    const installPage = await new Promise<import('playwright').Page>((resolve) => {
+    // Install may open a new tab for OAuth — watch all pages for success.
+    const installPage = await new Promise<import('playwright').Page>((resolve, reject) => {
+      let settled = false;
+      let interval: ReturnType<typeof setInterval>;
+      let timeout: ReturnType<typeof setTimeout>;
+
+      // Clear both timers on the way out. A stray setTimeout keeps the Node
+      // event loop alive, so setup would not exit for up to 2 minutes after
+      // printing "Setup complete".
+      const finish = (action: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(interval);
+        clearTimeout(timeout);
+        action();
+      };
+
       const checkUrl = (p: import('playwright').Page) => {
         if (p.url().includes('install-on-team?success=1')) {
-          resolve(p);
+          finish(() => resolve(p));
         }
       };
 
-      // Watch for new tabs
+      // Watch for new tabs and URL changes on the current page.
       context.on('page', (newPage) => {
         newPage.on('load', () => checkUrl(newPage));
       });
-
-      // Also watch URL changes on the current page
       page.on('load', () => checkUrl(page));
 
-      // Check periodically in case we missed the event
-      const interval = setInterval(() => {
-        for (const p of context.pages()) {
-          if (p.url().includes('install-on-team?success=1')) {
-            clearInterval(interval);
-            resolve(p);
-            return;
-          }
-        }
+      // Poll as well, in case a load event is missed.
+      interval = setInterval(() => {
+        for (const p of context.pages()) checkUrl(p);
       }, 1000);
 
-      // Timeout after 2 minutes
-      setTimeout(() => {
-        clearInterval(interval);
+      // Give up after 2 minutes so a missed install does not hang forever.
+      timeout = setTimeout(() => {
+        finish(() => reject(new Error('Timed out waiting for the app to be installed.')));
       }, 120_000);
     });
 

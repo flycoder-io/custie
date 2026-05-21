@@ -6,6 +6,7 @@ import { paths } from '../paths';
 export interface ClaudeResponse {
   sessionId: string;
   text: string;
+  isError?: boolean;
 }
 
 const debug = process.env['DEBUG'] === 'true';
@@ -117,9 +118,27 @@ function runCli(
           result?: string;
           session_id?: string;
           errors?: string[];
+          is_error?: boolean;
+          api_error_status?: number | null;
         };
 
         const sessionId = result.session_id ?? resumeSessionId ?? '';
+
+        // `subtype: "success"` can coexist with `is_error: true` (e.g. when
+        // an upstream API returns 400 "Could not process image"). Once that
+        // happens, the CLI persists the failed turn into the session file —
+        // any future --resume on this session_id replays the bad content and
+        // returns the same error in 0ms. Flag it so the caller can drop the
+        // session rather than save it.
+        if (result.is_error) {
+          if (debug) console.log(`[agent] is_error result:`, JSON.stringify(result));
+          resolve({
+            sessionId,
+            text: result.result || `API Error: ${result.api_error_status ?? 'unknown'}`,
+            isError: true,
+          });
+          return;
+        }
 
         if (result.type === 'result' && result.subtype === 'success') {
           resolve({ sessionId, text: result.result ?? '' });
@@ -140,7 +159,7 @@ function runCli(
         }
 
         const errors = (result.errors ?? []).filter(Boolean).join(', ') || 'Unknown error';
-        resolve({ sessionId, text: `Error: ${errors}` });
+        resolve({ sessionId, text: `Error: ${errors}`, isError: true });
       } catch {
         // If JSON parsing fails, treat stdout as plain text
         resolve({ sessionId: resumeSessionId ?? '', text: stdout.trim() || 'No response' });

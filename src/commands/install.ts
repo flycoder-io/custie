@@ -3,9 +3,8 @@ import { execSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { paths, ensureDirs } from '../paths';
-
-const PLIST_NAME = 'io.flycoder.custie.plist';
-const SYSTEMD_SERVICE = 'custie.service';
+import { getProfile } from '../profile';
+import { serviceLabel, plistPath, systemdUnitName } from '../service';
 
 function log(msg: string): void {
   console.log(`\n\x1b[36m>\x1b[0m ${msg}`);
@@ -77,6 +76,7 @@ function escapeXml(str: string): string {
 async function installMacOS(): Promise<void> {
   log('Setting up macOS LaunchAgent...');
 
+  const profile = getProfile();
   const custieBin = detectCustieBin();
   const nodePath = process.execPath;
   const claudeBinDir = detectClaudeBinDir();
@@ -98,18 +98,24 @@ async function installMacOS(): Promise<void> {
     '/bin',
   ].filter(Boolean);
 
+  // The default profile keeps the bare `start` args so its plist stays
+  // byte-for-byte identical to pre-profile installs (no reinstall needed).
+  const programArgs = profile === 'default' ? ['start'] : ['start', '--profile', profile];
+  const programArgsXml = [custieBin, ...programArgs]
+    .map((a) => `    <string>${escapeXml(a)}</string>`)
+    .join('\n');
+
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>io.flycoder.custie</string>
+  <string>${serviceLabel(profile)}</string>
 
   <key>ProgramArguments</key>
   <array>
-    <string>${custieBin}</string>
-    <string>start</string>
+${programArgsXml}
   </array>
 
   <key>EnvironmentVariables</key>
@@ -135,26 +141,25 @@ ${Object.entries(envVars)
 </dict>
 </plist>`;
 
-  const agentDir = join(homedir(), 'Library', 'LaunchAgents');
-  mkdirSync(agentDir, { recursive: true });
-  const plistPath = join(agentDir, PLIST_NAME);
+  const agentPlistPath = plistPath(profile);
+  mkdirSync(dirname(agentPlistPath), { recursive: true });
 
   // Remove existing
   try {
-    run(`launchctl unload "${plistPath}"`, { silent: true });
+    run(`launchctl unload "${agentPlistPath}"`, { silent: true });
   } catch {
     /* not loaded */
   }
   try {
-    unlinkSync(plistPath);
+    unlinkSync(agentPlistPath);
   } catch {
     /* not present */
   }
 
-  writeFileSync(plistPath, plist);
-  run(`launchctl load "${plistPath}"`, { silent: true });
+  writeFileSync(agentPlistPath, plist);
+  run(`launchctl load "${agentPlistPath}"`, { silent: true });
 
-  success('LaunchAgent installed and loaded.');
+  success(`LaunchAgent installed and loaded (profile: ${profile}).`);
   console.log(`  Logs: ${logDir}`);
   console.log(`  Check: launchctl list | grep custie`);
 }
@@ -162,6 +167,7 @@ ${Object.entries(envVars)
 async function installLinux(): Promise<void> {
   log('Setting up systemd user service...');
 
+  const profile = getProfile();
   const custieBin = detectCustieBin();
   const nodePath = process.execPath;
   const claudeBinDir = detectClaudeBinDir();
@@ -183,14 +189,17 @@ async function installLinux(): Promise<void> {
     '/bin',
   ].filter(Boolean);
 
+  const execStart =
+    profile === 'default' ? `${custieBin} start` : `${custieBin} start --profile ${profile}`;
+
   const unit = `[Unit]
-Description=Custie Slack Bot
+Description=Custie Slack Bot${profile === 'default' ? '' : ` (${profile})`}
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${custieBin} start
+ExecStart=${execStart}
 Restart=on-failure
 RestartSec=5
 ${envLines}
@@ -203,16 +212,17 @@ StandardError=append:${join(logDir, 'custie-error.log')}
 WantedBy=default.target
 `;
 
+  const unitName = systemdUnitName(profile);
   const unitDir = join(homedir(), '.config', 'systemd', 'user');
   mkdirSync(unitDir, { recursive: true });
-  writeFileSync(join(unitDir, SYSTEMD_SERVICE), unit);
+  writeFileSync(join(unitDir, `${unitName}.service`), unit);
 
   run('systemctl --user daemon-reload', { silent: true });
-  run('systemctl --user enable --now custie', { silent: true });
+  run(`systemctl --user enable --now ${unitName}`, { silent: true });
 
-  success('systemd user service installed and started.');
+  success(`systemd user service installed and started (profile: ${profile}).`);
   console.log(`  Logs: ${logDir}`);
-  console.log(`  Check: systemctl --user status custie`);
+  console.log(`  Check: systemctl --user status ${unitName}`);
 }
 
 export async function runInstall(): Promise<void> {

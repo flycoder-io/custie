@@ -40,7 +40,25 @@ custie slack channel-info <name-or-id>  # Channel details
 custie slack user-info <name-or-id>     # User details
 custie slack history <name-or-id>      # Read channel messages (--today, --limit, --oldest, --latest)
 custie slack post --channel <ch> --text <text>  # Post a message
+custie profiles          # List instances and their service status
 ```
+
+### Profiles (multiple instances)
+
+Custie can run multiple independent instances on one machine, each with its own
+config, database, automations, logs, and system service. Pass `--profile <name>`
+(or `-p <name>`) to any command:
+
+```bash
+custie setup --profile flycoder      # Configure a second instance
+custie install --profile flycoder    # Install its own launchd/systemd service
+custie config --profile flycoder     # Inspect its resolved paths
+```
+
+The unnamed `default` profile keeps the original flat paths, so existing
+single-instance installs need no migration. Named profiles are namespaced under
+`profiles/<name>/`. Resolution: `--profile` flag → `CUSTIE_PROFILE` env →
+`default`. See `src/profile.ts` and `src/service.ts`.
 
 ## Development Commands
 
