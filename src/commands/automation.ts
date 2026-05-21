@@ -2,6 +2,7 @@ import { WebClient } from '@slack/web-api';
 import { loadEnvFiles, loadConfig } from '../config';
 import { AutomationManager } from '../automations/manager';
 import { runAutomation } from '../automations/runner';
+import { refreshChannelRegistry, resolveCwd, loadChannels } from '../channels';
 import {
   DEFAULT_TIMEZONE,
   type ScheduleAutomation,
@@ -13,12 +14,16 @@ const USAGE = `
   Usage: custie automation <subcommand> [options]
 
   Subcommands:
-    list                                          List all automations
+    list                                          List all automations (grouped by channel)
     add --type schedule|trigger|mention-trigger   Add an automation
     remove <name>                                 Remove an automation
     enable <name>                                 Enable an automation
     disable <name>                                Disable an automation
     run <name>                                    Manually run a schedule
+
+  Add (all types):
+    --channel-scoped                Write the entry into channels.yml under
+                                    --channel's block instead of automations.yml
 
   Add schedule options:
     --name <name>                   Name of the schedule
@@ -52,6 +57,24 @@ function getArg(args: string[], flag: string): string | undefined {
   return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : undefined;
 }
 
+function describeSchedule(s: ScheduleAutomation): string {
+  const status = s.enabled ? 'active' : 'disabled';
+  const tz = s.timezone ?? DEFAULT_TIMEZONE;
+  return `  schedule  ${s.name} — ${s.cron} (${tz}) → ${s.channel} (${status})`;
+}
+
+function describeTrigger(t: TriggerAutomation): string {
+  const status = t.enabled ? 'active' : 'disabled';
+  const patterns = t.patterns.join(', ');
+  return `  trigger   ${t.name} — patterns: [${patterns}] → cooldown: ${t.cooldown}s (${status})`;
+}
+
+function describeMentionTrigger(m: MentionTrigger): string {
+  const status = m.enabled ? 'active' : 'disabled';
+  const sources = m.source_channels?.length ? m.source_channels.join(',') : '*';
+  return `  mention   ${m.name} — @${m.user} in [${sources}] → ${m.target_channel} (${status})`;
+}
+
 function printList(manager: AutomationManager): void {
   const config = manager.list();
 
@@ -64,31 +87,32 @@ function printList(manager: AutomationManager): void {
     return;
   }
 
-  if (config.schedules.length) {
-    console.log('\nSchedules:');
-    for (const s of config.schedules) {
-      const status = s.enabled ? 'active' : 'disabled';
-      const tz = s.timezone ?? DEFAULT_TIMEZONE;
-      console.log(`  ${s.name} — ${s.cron} (${tz}) → ${s.channel} (${status})`);
-    }
+  // Group every automation by its owning Slack channel. Schedules group by
+  // `channel`; mention triggers by `target_channel`; triggers may span
+  // multiple channels (or `*`), so they list under each.
+  const groups = new Map<string, string[]>();
+  const push = (channel: string, line: string) => {
+    const list = groups.get(channel) ?? [];
+    list.push(line);
+    groups.set(channel, list);
+  };
+
+  for (const s of config.schedules) push(s.channel || '(none)', describeSchedule(s));
+  for (const t of config.triggers) {
+    const channels = t.channels.length ? t.channels : ['(none)'];
+    for (const c of channels) push(c, describeTrigger(t));
+  }
+  for (const m of config.mention_triggers) {
+    push(m.target_channel || '(none)', describeMentionTrigger(m));
   }
 
-  if (config.triggers.length) {
-    console.log('\nTriggers:');
-    for (const t of config.triggers) {
-      const status = t.enabled ? 'active' : 'disabled';
-      const patterns = t.patterns.join(', ');
-      console.log(`  ${t.name} — patterns: [${patterns}] → cooldown: ${t.cooldown}s (${status})`);
-    }
-  }
-
-  if (config.mention_triggers.length) {
-    console.log('\nMention triggers:');
-    for (const m of config.mention_triggers) {
-      const status = m.enabled ? 'active' : 'disabled';
-      const sources = m.source_channels?.length ? m.source_channels.join(',') : '*';
-      console.log(`  ${m.name} — @${m.user} in [${sources}] → ${m.target_channel} (${status})`);
-    }
+  const { channels } = loadChannels();
+  for (const channel of [...groups.keys()].sort()) {
+    const entry = channels[channel];
+    const label = entry?.name ? `${channel} (${entry.name})` : channel;
+    const cwd = entry?.cwd ? ` — cwd: ${entry.cwd}` : '';
+    console.log(`\n${label}${cwd}`);
+    for (const line of groups.get(channel)!) console.log(line);
   }
   console.log();
 }
@@ -96,6 +120,7 @@ function printList(manager: AutomationManager): void {
 function handleAdd(manager: AutomationManager, args: string[]): void {
   const type = getArg(args, '--type');
   const name = getArg(args, '--name');
+  const channelScoped = args.includes('--channel-scoped');
 
   if (!name) {
     console.error('--name is required');
@@ -126,10 +151,16 @@ function handleAdd(manager: AutomationManager, args: string[]): void {
       catchup: catchup || undefined,
       created_at: new Date().toISOString(),
     };
-    manager.addSchedule(schedule);
-    console.log(`Schedule "${name}" added.`);
+    if (channelScoped) {
+      manager.addToChannel(channel, 'schedule', schedule);
+      console.log(`Schedule "${name}" added to channels.yml under ${channel}.`);
+    } else {
+      manager.addSchedule(schedule);
+      console.log(`Schedule "${name}" added.`);
+    }
   } else if (type === 'trigger') {
     const patternsRaw = getArg(args, '--patterns');
+    const channelScopedId = getArg(args, '--channel');
     const channelsRaw = getArg(args, '--channels') ?? '*';
     const cooldown = parseInt(getArg(args, '--cooldown') ?? '300', 10);
     const prompt = getArg(args, '--prompt');
@@ -138,28 +169,47 @@ function handleAdd(manager: AutomationManager, args: string[]): void {
       console.error('--patterns and --prompt are required for triggers');
       process.exit(1);
     }
+    if (channelScoped && !channelScopedId) {
+      console.error('--channel <id> is required with --channel-scoped');
+      process.exit(1);
+    }
 
     const trigger: TriggerAutomation = {
       name,
       enabled: true,
       patterns: patternsRaw.split(',').map((p) => p.trim()),
-      channels: channelsRaw.split(',').map((c) => c.trim()),
+      // For channel-scoped triggers the block key is the channel; the nested
+      // entry inherits it, so `channels` is left empty.
+      channels: channelScoped ? [] : channelsRaw.split(',').map((c) => c.trim()),
       require_mention: false,
       cooldown,
       prompt,
       created_at: new Date().toISOString(),
     };
-    manager.addTrigger(trigger);
-    console.log(`Trigger "${name}" added.`);
+    if (channelScoped) {
+      manager.addToChannel(channelScopedId!, 'trigger', trigger);
+      console.log(`Trigger "${name}" added to channels.yml under ${channelScopedId}.`);
+    } else {
+      manager.addTrigger(trigger);
+      console.log(`Trigger "${name}" added.`);
+    }
   } else if (type === 'mention-trigger') {
     const user = getArg(args, '--user');
+    const channelScopedId = getArg(args, '--channel');
     const targetChannel = getArg(args, '--target-channel');
     const prompt = getArg(args, '--prompt');
     const reactWith = getArg(args, '--react-with');
     const sourceChannelsRaw = getArg(args, '--source-channels');
 
-    if (!user || !targetChannel || !prompt) {
-      console.error('--user, --target-channel, and --prompt are required for mention-trigger');
+    // For channel-scoped mention triggers, --channel supplies the target.
+    const effectiveTarget = channelScoped ? channelScopedId : targetChannel;
+
+    if (!user || !effectiveTarget || !prompt) {
+      console.error(
+        channelScoped
+          ? '--user, --channel, and --prompt are required for channel-scoped mention-trigger'
+          : '--user, --target-channel, and --prompt are required for mention-trigger',
+      );
       process.exit(1);
     }
 
@@ -167,7 +217,7 @@ function handleAdd(manager: AutomationManager, args: string[]): void {
       name,
       enabled: true,
       user,
-      target_channel: targetChannel,
+      target_channel: effectiveTarget,
       prompt,
       react_with: reactWith,
       source_channels: sourceChannelsRaw
@@ -177,8 +227,13 @@ function handleAdd(manager: AutomationManager, args: string[]): void {
       dedup_per_thread: !args.includes('--no-dedup'),
       created_at: new Date().toISOString(),
     };
-    manager.addMentionTrigger(trigger);
-    console.log(`Mention trigger "${name}" added.`);
+    if (channelScoped) {
+      manager.addToChannel(channelScopedId!, 'mention-trigger', trigger);
+      console.log(`Mention trigger "${name}" added to channels.yml under ${channelScopedId}.`);
+    } else {
+      manager.addMentionTrigger(trigger);
+      console.log(`Mention trigger "${name}" added.`);
+    }
   } else {
     console.error('--type must be "schedule", "trigger", or "mention-trigger"');
     process.exit(1);
@@ -201,12 +256,15 @@ async function handleRun(manager: AutomationManager, name: string): Promise<void
   const config = loadConfig();
   const client = new WebClient(config.slackBotToken);
 
+  // Populate the channel registry so resolveCwd() can apply the channel layer.
+  refreshChannelRegistry();
+
   console.log(`Running "${name}"...`);
   await runAutomation({
     name: automation.name,
     prompt: automation.prompt,
     channel: automation.channel,
-    cwd: automation.cwd ?? config.claudeCwd,
+    cwd: resolveCwd(automation.cwd, automation.channel, config.claudeCwd),
     botName: config.botName,
     maxTurns: config.maxTurns,
     claudeConfigDir: config.claudeConfigDir,

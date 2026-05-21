@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import yaml from 'js-yaml';
 import cron from 'node-cron';
 import { paths } from '../paths';
+import { loadChannels, expandPath } from '../channels';
 
 export const DEFAULT_TIMEZONE = 'Australia/Sydney';
 
@@ -86,31 +87,104 @@ export function saveAutomations(config: AutomationsConfig): void {
   writeFileSync(filePath, content, 'utf-8');
 }
 
-export function validateSchedule(s: ScheduleAutomation): string[] {
+// Validation options. When an automation is nested under a channel block, the
+// parent supplies `channel` / `channels` / `target_channel`, so those fields
+// are not required in the YAML.
+export interface ValidateOpts {
+  nested?: boolean;
+}
+
+export function validateSchedule(s: ScheduleAutomation, opts: ValidateOpts = {}): string[] {
   const errors: string[] = [];
   if (!s.name) errors.push('name is required');
   if (!s.cron) errors.push('cron expression is required');
   else if (!cron.validate(s.cron)) errors.push(`invalid cron expression: ${s.cron}`);
   if (!s.prompt) errors.push('prompt is required');
-  if (!s.channel) errors.push('channel is required');
+  if (!opts.nested && !s.channel) errors.push('channel is required');
   return errors;
 }
 
-export function validateTrigger(t: TriggerAutomation): string[] {
+export function validateTrigger(t: TriggerAutomation, opts: ValidateOpts = {}): string[] {
   const errors: string[] = [];
   if (!t.name) errors.push('name is required');
   if (!t.patterns?.length) errors.push('at least one pattern is required');
-  if (!t.channels?.length) errors.push('at least one channel is required');
+  if (!opts.nested && !t.channels?.length) errors.push('at least one channel is required');
   if (!t.prompt) errors.push('prompt is required');
   if (t.cooldown < 0) errors.push('cooldown must be >= 0');
   return errors;
 }
 
-export function validateMentionTrigger(t: MentionTrigger): string[] {
+export function validateMentionTrigger(t: MentionTrigger, opts: ValidateOpts = {}): string[] {
   const errors: string[] = [];
   if (!t.name) errors.push('name is required');
   if (!t.user) errors.push('user is required (Slack user ID or "owner")');
-  if (!t.target_channel) errors.push('target_channel is required');
+  if (!opts.nested && !t.target_channel) errors.push('target_channel is required');
   if (!t.prompt) errors.push('prompt is required');
   return errors;
+}
+
+/**
+ * Effective automation list: `automations.yml` merged with every channel
+ * block's automations. Nested entries inherit `channel`/`cwd` from their block
+ * (an explicit `cwd` still wins); nested trigger `channels` and mention-trigger
+ * `target_channel` default to the block ID. Duplicate names are skipped with a
+ * warning so the first definition wins.
+ */
+export function loadEffectiveAutomations(): AutomationsConfig {
+  const base = loadAutomations();
+  const merged: AutomationsConfig = {
+    schedules: [...base.schedules],
+    triggers: [...base.triggers],
+    mention_triggers: [...base.mention_triggers],
+  };
+
+  const seen = new Set<string>([
+    ...base.schedules.map((s) => s.name),
+    ...base.triggers.map((t) => t.name),
+    ...base.mention_triggers.map((m) => m.name),
+  ]);
+
+  const claim = (name: string, kind: string): boolean => {
+    if (!name) return true;
+    if (seen.has(name)) {
+      console.warn(`[automations] Duplicate ${kind} name "${name}" — skipping channel-scoped copy`);
+      return false;
+    }
+    seen.add(name);
+    return true;
+  };
+
+  const { channels } = loadChannels();
+  for (const [channelId, entry] of Object.entries(channels)) {
+    const blockCwd = entry.cwd;
+    const a = entry.automations;
+    if (!a) continue;
+
+    for (const s of a.schedules ?? []) {
+      if (!claim(s.name, 'schedule')) continue;
+      merged.schedules.push({
+        ...s,
+        channel: s.channel ?? channelId,
+        cwd: s.cwd ? expandPath(s.cwd) : blockCwd,
+      });
+    }
+
+    for (const t of a.triggers ?? []) {
+      if (!claim(t.name, 'trigger')) continue;
+      merged.triggers.push({
+        ...t,
+        channels: t.channels?.length ? t.channels : [channelId],
+      });
+    }
+
+    for (const m of a.mention_triggers ?? []) {
+      if (!claim(m.name, 'mention-trigger')) continue;
+      merged.mention_triggers.push({
+        ...m,
+        target_channel: m.target_channel ?? channelId,
+      });
+    }
+  }
+
+  return merged;
 }
