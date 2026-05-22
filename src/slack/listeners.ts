@@ -40,6 +40,11 @@ function getRejectMessage(): string {
 }
 const debug = process.env['DEBUG'] === 'true';
 
+// Emoji added to the triggering message while Claude is working. A reaction is
+// silent — unlike a posted message, it doesn't mark the channel unread or
+// notify thread participants.
+const THINKING_REACTION = 'hourglass_flowing_sand';
+
 const nameCache = new Map<string, string>();
 
 async function resolveUser(client: App['client'], userId: string): Promise<string> {
@@ -224,13 +229,36 @@ export function registerListeners(
     senderId?: string,
     sessionId?: string,
     threadTs?: string,
+    reactTs?: string,
   ): Promise<void> {
-    // Post a typing placeholder
-    const typingMsg = (await client.chat.postMessage({
-      channel: channelId,
-      ...(threadTs ? { thread_ts: threadTs } : {}),
-      text: '_Thinking ..._',
-    })) as { ts: string };
+    // Signal work-in-progress with a reaction on the triggering message
+    // instead of posting a "_Thinking ..._" message.
+    let reacted = false;
+    if (reactTs) {
+      try {
+        await client.reactions.add({
+          channel: channelId,
+          timestamp: reactTs,
+          name: THINKING_REACTION,
+        });
+        reacted = true;
+      } catch (err) {
+        if (debug) console.log('[listener] Failed to add thinking reaction:', err);
+      }
+    }
+    const clearReaction = async (): Promise<void> => {
+      if (!reacted || !reactTs) return;
+      reacted = false;
+      try {
+        await client.reactions.remove({
+          channel: channelId,
+          timestamp: reactTs,
+          name: THINKING_REACTION,
+        });
+      } catch (err) {
+        if (debug) console.log('[listener] Failed to remove thinking reaction:', err);
+      }
+    };
 
     try {
       // Build context-enriched prompt so Claude knows where and who
@@ -292,18 +320,9 @@ export function registerListeners(
         );
       }
 
-      // Update the typing message with the first chunk
-      const first = messages[0]!;
-      await client.chat.update({
-        channel: channelId,
-        ts: typingMsg.ts,
-        text: first.text,
-        ...(first.blocks ? { blocks: first.blocks as never } : {}),
-      });
-
-      // Post remaining chunks as new messages
-      for (let i = 1; i < messages.length; i++) {
-        const m = messages[i]!;
+      // Remove the in-progress reaction, then post the response chunks.
+      await clearReaction();
+      for (const m of messages) {
         await say({
           text: m.text,
           ...(m.blocks ? { blocks: m.blocks as never } : {}),
@@ -312,13 +331,11 @@ export function registerListeners(
       }
     } catch (err) {
       console.error('[listener] Error handling message:', err);
-      await client.chat.update({
-        channel: channelId,
-        ts: typingMsg.ts,
+      await clearReaction();
+      await say({
         text: 'Sorry, something went wrong. Please try again.',
-      });
-    } finally {
-      // no-op
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      } as never);
     }
   }
 
@@ -367,7 +384,7 @@ export function registerListeners(
         const threadContext = await fetchThreadContext(client, channelId, threadTs, userId);
         enrichedPrompt = threadContext + prompt;
       }
-      await handleMessage(client, say, channelId, threadTs, enrichedPrompt, event.user, sessionId, threadTs);
+      await handleMessage(client, say, channelId, threadTs, enrichedPrompt, event.user, sessionId, threadTs, event.ts);
     });
   });
 
@@ -511,6 +528,7 @@ export function registerListeners(
           senderId,
           session?.sessionId,
           threadTs,
+          event.ts,
         );
       });
       return;
@@ -556,6 +574,7 @@ export function registerListeners(
         senderId,
         existingSession.sessionId,
         threadTs,
+        event.ts,
       );
     });
   });
@@ -628,6 +647,7 @@ export function registerListeners(
           userId,
           session?.sessionId,
           threadTs,
+          message.ts,
         );
       });
     },
@@ -723,6 +743,7 @@ export function registerListeners(
         buildSkillPrompt(skillName),
         userId,
         undefined,
+        intro.ts,
         intro.ts,
       );
     });
