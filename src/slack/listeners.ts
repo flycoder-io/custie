@@ -42,8 +42,10 @@ const debug = process.env['DEBUG'] === 'true';
 
 // Emoji added to the triggering message while Claude is working. A reaction is
 // silent — unlike a posted message, it doesn't mark the channel unread or
-// notify thread participants.
-const THINKING_REACTION = 'hourglass_flowing_sand';
+// notify thread participants. This is a custom workspace emoji (assets/
+// claude-spark.gif); if it's ever removed, reactions.add fails and is caught
+// silently, so no reaction is shown but the response still posts.
+const THINKING_REACTION = 'claude-spark';
 
 const nameCache = new Map<string, string>();
 
