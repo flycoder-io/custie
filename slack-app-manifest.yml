@@ -11,6 +11,11 @@ features:
   bot_user:
     display_name: Custie
     always_online: true
+  slash_commands:
+    - command: /custie
+      description: Browse skills and what Custie can do
+      usage_hint: skills | help
+      should_escape: false
 
 oauth_config:
   scopes:
@@ -19,6 +24,7 @@ oauth_config:
       - channels:history
       - channels:read
       - chat:write
+      - commands
       - files:read
       - groups:history
       - groups:read
