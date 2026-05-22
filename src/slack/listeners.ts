@@ -18,6 +18,14 @@ import {
   buildActionsBlock,
   BUTTON_ACTION_ID_PREFIX,
 } from './buttons';
+import { listSkills } from '../claude/skills';
+import {
+  parseCommand,
+  buildSkillsMessage,
+  buildHelpMessage,
+  buildSkillPrompt,
+  SKILL_SELECT_ACTION_ID,
+} from './commands';
 
 const REJECT_MESSAGES = [
   "Sorry, I'm a personal assistant and only respond to my owner. :bow:",
@@ -624,4 +632,99 @@ export function registerListeners(
       });
     },
   );
+
+  // `/custie` slash command. `skills` opens a searchable skill picker; any
+  // other (or empty) subcommand shows help. Both replies are ephemeral so the
+  // channel stays clean — the skill conversation itself is posted publicly.
+  app.command('/custie', async ({ command, ack, respond }) => {
+    await ack();
+
+    if (allowedUserIds.size > 0 && !allowedUserIds.has(command.user_id)) {
+      await respond({ response_type: 'ephemeral', text: getRejectMessage() });
+      return;
+    }
+
+    const { sub } = parseCommand(command.text);
+
+    if (sub === 'skills') {
+      const cwd = resolveCwd(undefined, command.channel_id, claudeCwd);
+      const skills = listSkills(claudeConfigDir, cwd);
+      if (skills.length === 0) {
+        await respond({
+          response_type: 'ephemeral',
+          text: 'No skills found for this channel.',
+        });
+        return;
+      }
+      const msg = buildSkillsMessage(skills);
+      await respond({
+        response_type: 'ephemeral',
+        text: msg.text,
+        blocks: msg.blocks as never,
+      });
+      return;
+    }
+
+    const help = buildHelpMessage(botName);
+    await respond({
+      response_type: 'ephemeral',
+      text: help.text,
+      blocks: help.blocks as never,
+    });
+  });
+
+  // Skill picked from the `/custie skills` dropdown. Collapse the ephemeral
+  // picker, anchor a public thread, and engage the chosen skill inside it.
+  app.action(SKILL_SELECT_ACTION_ID, async ({ body, ack, client, respond }) => {
+    await ack();
+
+    if (body.type !== 'block_actions') return;
+    const action = body.actions?.[0];
+    if (!action || action.type !== 'static_select') return;
+
+    const userId = body.user?.id;
+    if (allowedUserIds.size > 0 && (!userId || !allowedUserIds.has(userId))) return;
+
+    const channelId = body.channel?.id;
+    const skillName = action.selected_option?.value?.trim();
+    if (!channelId || !skillName) return;
+
+    // Collapse the picker so it can't be reused.
+    try {
+      await respond({
+        response_type: 'ephemeral',
+        replace_original: true,
+        text: `🛠️ Starting *${skillName}*…`,
+      });
+    } catch (err) {
+      if (debug) console.log('[skill-select] failed to collapse picker:', err);
+    }
+
+    // Anchor a thread with an intro message; the skill conversation runs inside it.
+    const intro = (await client.chat.postMessage({
+      channel: channelId,
+      text: `🛠️ <@${userId}> started the *${skillName}* skill.`,
+    })) as { ts: string };
+
+    const sayInThread = async (msg: { text: string; thread_ts?: string }) => {
+      await client.chat.postMessage({ channel: channelId, ...msg });
+    };
+
+    const threadKey = `${channelId}:${intro.ts}`;
+    queue.enqueue(threadKey, async () => {
+      if (debug) {
+        console.log(`[skill-select] user=${userId} channel=${channelId} skill="${skillName}"`);
+      }
+      await handleMessage(
+        client,
+        sayInThread,
+        channelId,
+        intro.ts,
+        buildSkillPrompt(skillName),
+        userId,
+        undefined,
+        intro.ts,
+      );
+    });
+  });
 }

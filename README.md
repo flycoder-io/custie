@@ -93,6 +93,15 @@ custie prompt    # opens ~/.config/custie/prompt.md in your editor
 custie config --edit
 ```
 
+## Slash Commands
+
+Inside Slack, type `/custie` to discover what the bot can do:
+
+- `/custie skills` -- browse the available skills in a searchable dropdown; pick one to start a thread that runs it.
+- `/custie help` -- a quick reminder of how to use the bot.
+
+> Upgrading an existing install? The slash command is declared in `slack-app-manifest.yml`. Re-apply the manifest to your Slack app (App settings -> **App Manifest**), then reinstall the app so `/custie` is registered.
+
 ## CLI Reference
 
 | Command | What it does |
