@@ -39,6 +39,7 @@ custie slack users       # List workspace users
 custie slack channel-info <name-or-id>  # Channel details
 custie slack user-info <name-or-id>     # User details
 custie slack history <name-or-id>      # Read channel messages (--today, --limit, --oldest, --latest)
+custie slack thread <name-or-id> <ts>  # Read a thread (parent + all replies)
 custie slack post --channel <ch> --text <text>  # Post a message
 custie profiles          # List instances and their service status
 ```
