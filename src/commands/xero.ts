@@ -162,7 +162,11 @@ async function runAuthFlow(): Promise<void> {
   console.log(`Redirect URI (must match the one configured at developer.xero.com): ${redirectUri}`);
   console.log(`\nIf the browser does not open, paste this URL:\n  ${authUrl.toString()}\n`);
 
+  const AUTH_TIMEOUT_MS = 5 * 60 * 1000;
+
   const code: string = await new Promise((resolve, reject) => {
+    let timeout: NodeJS.Timeout | undefined;
+
     const server = createServer((req, res) => {
       if (!req.url?.startsWith('/callback')) {
         res.writeHead(404).end();
@@ -173,22 +177,26 @@ async function runAuthFlow(): Promise<void> {
       const s = url.searchParams.get('state');
       const error = url.searchParams.get('error');
 
+      const finish = (ok: boolean, value: string | Error) => {
+        if (timeout) clearTimeout(timeout);
+        server.close();
+        if (ok) resolve(value as string);
+        else reject(value as Error);
+      };
+
       if (error) {
         res.writeHead(400, { 'Content-Type': 'text/plain' }).end(`Xero auth error: ${error}`);
-        server.close();
-        reject(new Error(`Xero auth error: ${error}`));
+        finish(false, new Error(`Xero auth error: ${error}`));
         return;
       }
       if (s !== state) {
         res.writeHead(400, { 'Content-Type': 'text/plain' }).end('State mismatch.');
-        server.close();
-        reject(new Error('State mismatch — possible CSRF attempt'));
+        finish(false, new Error('State mismatch — possible CSRF attempt'));
         return;
       }
       if (!c) {
         res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Missing authorisation code.');
-        server.close();
-        reject(new Error('Missing code in callback'));
+        finish(false, new Error('Missing code in callback'));
         return;
       }
 
@@ -198,12 +206,38 @@ async function runAuthFlow(): Promise<void> {
            <p>You can close this tab and return to your terminal.</p>
          </body></html>`,
       );
-      server.close();
-      resolve(c);
+      finish(true, c);
     });
 
-    server.on('error', reject);
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (timeout) clearTimeout(timeout);
+      if (err.code === 'EADDRINUSE') {
+        reject(
+          new Error(
+            `Port ${port} is already in use — likely a previous 'custie xero auth' that didn't finish.\n` +
+              `Find and kill it:\n` +
+              `  lsof -i :${port} -P -n   # macOS/Linux\n` +
+              `  kill <PID>\n` +
+              `Or pick a different port:\n` +
+              `  XERO_REDIRECT_PORT=5556 custie xero auth\n` +
+              `(remember to update the Redirect URI at developer.xero.com to match)`,
+          ),
+        );
+        return;
+      }
+      reject(err);
+    });
+
     server.listen(port, '127.0.0.1', () => {
+      timeout = setTimeout(() => {
+        server.close();
+        reject(
+          new Error(
+            `Timed out after ${AUTH_TIMEOUT_MS / 1000}s waiting for Xero callback. ` +
+              `Re-run 'custie xero auth' and complete the browser flow.`,
+          ),
+        );
+      }, AUTH_TIMEOUT_MS);
       openBrowser(authUrl.toString());
     });
   });
