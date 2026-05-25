@@ -13,11 +13,7 @@ import { MessageQueue } from '../queue/message-queue';
 import { toSlackMarkdown, splitMessage } from './formatters';
 import { markdownToBlocks, blockToFallbackText } from './blocks';
 import { downloadSlackFiles, buildFilesPromptSection, type SlackFile } from './file-downloader';
-import {
-  extractButtons,
-  buildActionsBlock,
-  BUTTON_ACTION_ID_PREFIX,
-} from './buttons';
+import { extractButtons, buildActionsBlock, BUTTON_ACTION_ID_PREFIX } from './buttons';
 import { listSkills } from '../claude/skills';
 import {
   parseCommand,
@@ -211,7 +207,16 @@ export function registerListeners(
   triggerEngine?: TriggerEngine,
   mentionTriggerEngine?: MentionTriggerEngine,
 ): void {
-  const { claudeCwd, claudeConfigDir, botName, allowedUserIds, maxTurns, ownerUserId, slackBotToken, autoRespondChannelIds } = config;
+  const {
+    claudeCwd,
+    claudeConfigDir,
+    botName,
+    allowedUserIds,
+    maxTurns,
+    ownerUserId,
+    slackBotToken,
+    autoRespondChannelIds,
+  } = config;
   const queue = new MessageQueue();
   let botUserId: string | undefined;
 
@@ -287,10 +292,17 @@ export function registerListeners(
         sessionId,
       );
       if (response.isError) {
-        // The CLI persists the failed turn into the session file, so any
-        // future --resume on this session would replay the bad turn and fail
-        // again. Drop the session so the next message starts fresh.
-        store.deleteSession(channelId, sessionKey);
+        if (response.isTransientError) {
+          // Network / 5xx failure — the session file is not poisoned, so keep
+          // the existing sessionId so the next message can --resume and pick
+          // up the full thread context.
+          if (debug) console.log('[handle] transient error, keeping session for resume');
+        } else {
+          // The CLI persists the failed turn into the session file, so any
+          // future --resume on this session would replay the bad turn and fail
+          // again. Drop the session so the next message starts fresh.
+          store.deleteSession(channelId, sessionKey);
+        }
       } else {
         store.saveSession(channelId, sessionKey, response.sessionId);
       }
@@ -299,9 +311,10 @@ export function registerListeners(
       const actionsBlock = buttons ? buildActionsBlock(buttons) : null;
 
       const rtBlocks = markdownToBlocks(cleanedText);
-      const messages: Array<{ text: string; blocks?: unknown[] }> = rtBlocks.length > 0
-        ? rtBlocks.map((b) => ({ blocks: [b] as unknown[], text: blockToFallbackText(b) }))
-        : splitMessage(toSlackMarkdown(cleanedText)).map((text) => ({ text }));
+      const messages: Array<{ text: string; blocks?: unknown[] }> =
+        rtBlocks.length > 0
+          ? rtBlocks.map((b) => ({ blocks: [b] as unknown[], text: blockToFallbackText(b) }))
+          : splitMessage(toSlackMarkdown(cleanedText)).map((text) => ({ text }));
 
       if (actionsBlock) {
         const last = messages[messages.length - 1]!;
@@ -355,7 +368,7 @@ export function registerListeners(
     const userId = await ensureBotUserId(client);
     const basePrompt = event.text.replace(new RegExp(`<@${userId}>`, 'g'), '').trim();
     const downloaded = await downloadSlackFiles(
-      ('files' in event ? (event.files as SlackFile[] | undefined) : undefined),
+      'files' in event ? (event.files as SlackFile[] | undefined) : undefined,
       slackBotToken,
     );
     const prompt = basePrompt + buildFilesPromptSection(downloaded);
@@ -386,7 +399,17 @@ export function registerListeners(
         const threadContext = await fetchThreadContext(client, channelId, threadTs, userId);
         enrichedPrompt = threadContext + prompt;
       }
-      await handleMessage(client, say, channelId, threadTs, enrichedPrompt, event.user, sessionId, threadTs, event.ts);
+      await handleMessage(
+        client,
+        say,
+        channelId,
+        threadTs,
+        enrichedPrompt,
+        event.user,
+        sessionId,
+        threadTs,
+        event.ts,
+      );
     });
   });
 
@@ -473,9 +496,7 @@ export function registerListeners(
             claudeConfigDir: config.claudeConfigDir,
             claudeCwd: config.claudeCwd,
           },
-        ).catch((err) =>
-          console.error(`[mention-trigger:${trigger.name}] Error:`, err),
-        );
+        ).catch((err) => console.error(`[mention-trigger:${trigger.name}] Error:`, err));
       }
     }
 
@@ -508,7 +529,7 @@ export function registerListeners(
       const threadKey = `${channelId}:${sessionKey}`;
 
       const downloaded = await downloadSlackFiles(
-        ('files' in event ? (event.files as SlackFile[] | undefined) : undefined),
+        'files' in event ? (event.files as SlackFile[] | undefined) : undefined,
         slackBotToken,
       );
       const prompt = event.text.trim() + buildFilesPromptSection(downloaded);
@@ -543,7 +564,7 @@ export function registerListeners(
     if (!threadTs || !senderId) return;
 
     const downloaded = await downloadSlackFiles(
-      ('files' in event ? (event.files as SlackFile[] | undefined) : undefined),
+      'files' in event ? (event.files as SlackFile[] | undefined) : undefined,
       slackBotToken,
     );
     const prompt = event.text.trim() + buildFilesPromptSection(downloaded);
@@ -584,76 +605,78 @@ export function registerListeners(
   // Quick-reply button clicks. Strip the actions block from the original
   // message, leave a "✓ Selected: X" context line, then feed the choice
   // back into the same Claude session as if the user had typed it.
-  app.action(
-    new RegExp(`^${BUTTON_ACTION_ID_PREFIX}`),
-    async ({ body, ack, client }) => {
-      await ack();
+  app.action(new RegExp(`^${BUTTON_ACTION_ID_PREFIX}`), async ({ body, ack, client }) => {
+    await ack();
 
-      if (body.type !== 'block_actions') return;
-      const action = body.actions?.[0];
-      if (!action || action.type !== 'button') return;
+    if (body.type !== 'block_actions') return;
+    const action = body.actions?.[0];
+    if (!action || action.type !== 'button') return;
 
-      const userId = body.user?.id;
-      if (allowedUserIds.size > 0 && (!userId || !allowedUserIds.has(userId))) return;
+    const userId = body.user?.id;
+    if (allowedUserIds.size > 0 && (!userId || !allowedUserIds.has(userId))) return;
 
-      const channelId = body.channel?.id;
-      const message = body.message as
-        | { ts: string; thread_ts?: string; blocks?: Array<{ type: string; block_id?: string }>; text?: string }
-        | undefined;
-      if (!channelId || !message) return;
-
-      const choice = (action.value ?? action.text?.text ?? '').trim();
-      if (!choice) return;
-
-      const threadTs = message.thread_ts;
-      const sessionKey = threadTs ?? channelId;
-      const threadKey = `${channelId}:${sessionKey}`;
-
-      // Rebuild message blocks without the actions block, and append a
-      // context block showing the selection so the thread reads naturally.
-      const remainingBlocks = (message.blocks ?? []).filter(
-        (b) => !(b.type === 'actions' && b.block_id?.startsWith('custie_buttons')),
-      );
-      const selectedBlock = {
-        type: 'context',
-        elements: [{ type: 'mrkdwn', text: `✓ Selected: *${choice}*` }],
-      };
-      try {
-        await client.chat.update({
-          channel: channelId,
-          ts: message.ts,
-          text: message.text ?? choice,
-          blocks: [...remainingBlocks, selectedBlock] as never,
-        });
-      } catch (err) {
-        if (debug) console.log('[button] failed to strip actions block:', err);
-      }
-
-      const sayInThread = async (msg: { text: string; thread_ts?: string }) => {
-        await client.chat.postMessage({ channel: channelId, ...msg });
-      };
-
-      queue.enqueue(threadKey, async () => {
-        const session = store.getSession(channelId, sessionKey);
-        if (debug) {
-          console.log(
-            `[button] user=${userId} channel=${channelId} thread=${threadTs ?? '(root)'} choice="${choice}" resume=${session?.sessionId ?? 'none'}`,
-          );
+    const channelId = body.channel?.id;
+    const message = body.message as
+      | {
+          ts: string;
+          thread_ts?: string;
+          blocks?: Array<{ type: string; block_id?: string }>;
+          text?: string;
         }
-        await handleMessage(
-          client,
-          sayInThread,
-          channelId,
-          sessionKey,
-          choice,
-          userId,
-          session?.sessionId,
-          threadTs,
-          message.ts,
-        );
+      | undefined;
+    if (!channelId || !message) return;
+
+    const choice = (action.value ?? action.text?.text ?? '').trim();
+    if (!choice) return;
+
+    const threadTs = message.thread_ts;
+    const sessionKey = threadTs ?? channelId;
+    const threadKey = `${channelId}:${sessionKey}`;
+
+    // Rebuild message blocks without the actions block, and append a
+    // context block showing the selection so the thread reads naturally.
+    const remainingBlocks = (message.blocks ?? []).filter(
+      (b) => !(b.type === 'actions' && b.block_id?.startsWith('custie_buttons')),
+    );
+    const selectedBlock = {
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: `✓ Selected: *${choice}*` }],
+    };
+    try {
+      await client.chat.update({
+        channel: channelId,
+        ts: message.ts,
+        text: message.text ?? choice,
+        blocks: [...remainingBlocks, selectedBlock] as never,
       });
-    },
-  );
+    } catch (err) {
+      if (debug) console.log('[button] failed to strip actions block:', err);
+    }
+
+    const sayInThread = async (msg: { text: string; thread_ts?: string }) => {
+      await client.chat.postMessage({ channel: channelId, ...msg });
+    };
+
+    queue.enqueue(threadKey, async () => {
+      const session = store.getSession(channelId, sessionKey);
+      if (debug) {
+        console.log(
+          `[button] user=${userId} channel=${channelId} thread=${threadTs ?? '(root)'} choice="${choice}" resume=${session?.sessionId ?? 'none'}`,
+        );
+      }
+      await handleMessage(
+        client,
+        sayInThread,
+        channelId,
+        sessionKey,
+        choice,
+        userId,
+        session?.sessionId,
+        threadTs,
+        message.ts,
+      );
+    });
+  });
 
   // `/custie` slash command. `skills` opens a searchable skill picker; any
   // other (or empty) subcommand shows help. Both replies are ephemeral so the
