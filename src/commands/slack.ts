@@ -23,6 +23,7 @@ const USAGE = `
     channel-info <name-or-id>       Show channel details
     user-info <name-or-id>          Show user details
     history <name-or-id>            Show recent channel messages
+    thread <name-or-id> <ts>        Show all replies in a thread (parent + replies)
     post --channel <ch> --text <t> [--thread <ts>] [--markdown]  Post a message (--markdown converts standard markdown to Slack Block Kit)
     delete --channel <ch> --ts <t>  Delete a bot message
 
@@ -177,10 +178,45 @@ async function channelHistory(client: WebClient, nameOrId: string, args: string[
   for (const msg of messages) {
     const ts = msg.ts ? new Date(parseFloat(msg.ts) * 1000) : null;
     const time = ts ? ts.toLocaleString('en-AU', { timeZone: 'Australia/Sydney' }) : '?';
-    const author = msg.user ? displayNameFor(msg.user) : msg.bot_id ?? 'unknown';
+    const author = msg.user ? displayNameFor(msg.user) : (msg.bot_id ?? 'unknown');
     const text = renderText(msg.text ?? '').replace(/\n/g, '\n    ');
     const thread = msg.reply_count ? ` [${msg.reply_count} replies]` : '';
     console.log(`  [${time}] ${author} (${msg.user ?? msg.bot_id ?? '?'})${thread}:`);
+    console.log(`    ${text}`);
+    console.log();
+  }
+}
+
+async function threadReplies(client: WebClient, nameOrId: string, ts: string): Promise<void> {
+  const channelId = await resolveChannelId(client, nameOrId);
+
+  const result = await client.conversations.replies({ channel: channelId, ts });
+  const messages = result.messages ?? [];
+
+  if (!messages.length) {
+    console.log('No messages found in thread.');
+    return;
+  }
+
+  const userIds = [...new Set(messages.map((m) => m.user).filter(Boolean))] as string[];
+  await ensureUsersCached(client, userIds);
+
+  const renderText = (raw: string): string =>
+    raw.replace(/<@(U[A-Z0-9]+)>/g, (_, uid) => `@${displayNameFor(uid)}`);
+
+  console.log(`Thread (${messages.length} message${messages.length === 1 ? '' : 's'}):\n`);
+  for (const [i, msg] of messages.entries()) {
+    const time = msg.ts
+      ? new Date(parseFloat(msg.ts) * 1000).toLocaleString('en-AU', {
+          timeZone: 'Australia/Sydney',
+        })
+      : '?';
+    const author = msg.user ? displayNameFor(msg.user) : (msg.bot_id ?? 'unknown');
+    const text = renderText(msg.text ?? '').replace(/\n/g, '\n    ');
+    const label = i === 0 ? '[parent]' : `[reply ${i}]`;
+    console.log(
+      `  ${label} [${time}] ${author} (${msg.user ?? msg.bot_id ?? '?'}, ts: ${msg.ts}):`,
+    );
     console.log(`    ${text}`);
     console.log();
   }
@@ -285,6 +321,16 @@ export async function runSlackCmd(args: string[]): Promise<void> {
       }
       const client = createClient();
       await channelHistory(client, args[1], args.slice(2));
+      break;
+    }
+
+    case 'thread': {
+      if (!args[1] || !args[2]) {
+        console.error('Usage: custie slack thread <name-or-id> <ts>');
+        process.exit(1);
+      }
+      const client = createClient();
+      await threadReplies(client, args[1], args[2]);
       break;
     }
 
