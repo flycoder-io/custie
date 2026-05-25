@@ -13,6 +13,7 @@ import {
   runLogs,
   runSlackCmd,
   runProfiles,
+  runXeroCmd,
 } from './commands';
 import { getProfile } from './profile';
 
@@ -33,6 +34,7 @@ const USAGE = `
     automation   Manage scheduled tasks and triggers
     slack        Query Slack (channels, users, post messages)
     profiles     List instances and their service status
+    xero         Connect to Xero and expose it as an MCP server
 
   Options:
     -p, --profile <name>   Target a named instance (default: the unnamed instance)
@@ -129,6 +131,10 @@ async function main(): Promise<void> {
 
     case 'profiles':
       await runProfiles();
+      break;
+
+    case 'xero':
+      await runXeroCmd(args.slice(1));
       break;
 
     case '-v':
