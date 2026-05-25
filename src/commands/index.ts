@@ -10,3 +10,4 @@ export * from './automation';
 export * from './stop';
 export * from './logs';
 export * from './slack';
+export * from './xero';
