@@ -7,9 +7,42 @@ export interface ClaudeResponse {
   sessionId: string;
   text: string;
   isError?: boolean;
+  /**
+   * True when the error appears to be transient (network failure, 5xx) — the
+   * underlying session is intact and the caller should keep it for the next
+   * `--resume`. False / undefined means the error baked into the session file
+   * (e.g. a 4xx replaying on every resume) and the caller should drop it.
+   */
+  isTransientError?: boolean;
 }
 
 const debug = process.env['DEBUG'] === 'true';
+
+const TRANSIENT_ERROR_PATTERNS = [
+  /ECONNREFUSED/i,
+  /ECONNRESET/i,
+  /ETIMEDOUT/i,
+  /ENOTFOUND/i,
+  /EAI_AGAIN/i,
+  /Unable to connect to API/i,
+  /ConnectionRefused/i,
+  /socket hang up/i,
+  /network/i,
+];
+
+function isTransientError(text: string, apiErrorStatus: number | null | undefined): boolean {
+  // No HTTP status usually means the request never reached the API (DNS,
+  // connect, TLS). Treat as transient.
+  if (apiErrorStatus == null) {
+    return TRANSIENT_ERROR_PATTERNS.some((p) => p.test(text));
+  }
+  // 5xx: server-side, retry-safe.
+  if (apiErrorStatus >= 500 && apiErrorStatus < 600) return true;
+  // 408 Request Timeout, 429 Rate Limited: retry-safe.
+  if (apiErrorStatus === 408 || apiErrorStatus === 429) return true;
+  // 4xx (auth, bad input): the failure persists in the session file. Not transient.
+  return false;
+}
 
 function loadSystemPrompt(): string {
   // Check user-customized prompt first, then default in package root
@@ -31,11 +64,7 @@ function buildSystemPrompt(botName: string): string {
   return capabilities ? `${prompt}\n\n${capabilities}` : prompt;
 }
 
-function buildArgs(
-  prompt: string,
-  botName: string,
-  resumeSessionId?: string,
-): string[] {
+function buildArgs(prompt: string, botName: string, resumeSessionId?: string): string[] {
   const args = [
     '--print',
     '--output-format',
@@ -132,10 +161,12 @@ function runCli(
         // session rather than save it.
         if (result.is_error) {
           if (debug) console.log(`[agent] is_error result:`, JSON.stringify(result));
+          const text = result.result || `API Error: ${result.api_error_status ?? 'unknown'}`;
           resolve({
             sessionId,
-            text: result.result || `API Error: ${result.api_error_status ?? 'unknown'}`,
+            text,
             isError: true,
+            isTransientError: isTransientError(text, result.api_error_status),
           });
           return;
         }
@@ -152,7 +183,7 @@ function runCli(
           resolve({
             sessionId,
             text:
-              "That query was a bit too complex for me to handle here. You can continue this session directly:\n" +
+              'That query was a bit too complex for me to handle here. You can continue this session directly:\n' +
               `\`claude --resume ${sessionId}\``,
           });
           return;
