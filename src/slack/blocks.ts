@@ -418,7 +418,9 @@ function decodeEntities(s: string): string {
 export function blockToFallbackText(block: RichTextBlock): string {
   const parts: string[] = [];
   for (const el of block.elements) parts.push(elementToText(el));
-  return parts.join('\n').trim();
+  // Slack's chat.postMessage rejects an empty top-level `text` even when
+  // `blocks` carries the visible payload, so guarantee at least one char.
+  return parts.join('\n').trim() || ' ';
 }
 
 function elementToText(el: RichElement): string {

@@ -37,6 +37,19 @@ If your prompt is prefixed with `[automation: schedule=<name>...]`, you are runn
 
 If there is no `[automation: ...]` prefix, you are responding to a user message in Slack — use the commands below normally.
 
+## Long-Running Commands
+
+The Bash tool waits for each command to fully exit before returning, and your overall response is killed after 15 minutes. Long-running processes that never exit on their own (`pnpm dev`, `npm start`, `vite`, `next dev`, `docker run` without `-d`, `tail -f`, `inotifywait -m`, anything ending in `dev`/`serve`/`watch`) will hang the whole thread.
+
+If you need to start a server or watcher:
+
+1. Background it: `nohup <cmd> > /tmp/<name>.log 2>&1 & disown`
+2. Capture the PID: `echo $!`
+3. Verify it started (a few seconds later): poll the port (`curl -sf localhost:9999/health`) or `tail /tmp/<name>.log`
+4. Reply to the user with the PID, log path, and how to stop it (`kill <pid>`)
+
+Never run a foreground watcher / dev server / `tail -f` directly — even if the user asks "run the server" or "start dev mode", you must background it.
+
 ## Important: No Browser Automation for Slack
 
 NEVER use Playwright, Puppeteer, or any browser automation to access Slack. You already have direct API access via the `custie slack` commands below — always use those instead. Browser automation is slower, fragile, and unnecessary when you have API access.

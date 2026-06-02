@@ -44,6 +44,23 @@ function isTransientError(text: string, apiErrorStatus: number | null | undefine
   return false;
 }
 
+// Hard timeout for the Claude CLI subprocess. The CLI runs with --output-format json,
+// which only prints on completion, so we can't detect idle — only total wall-clock.
+// A subprocess hanging this long is almost always stuck on a long-running command
+// (dev server, watcher) inside a Bash tool call. 15 min covers genuinely long thinking
+// + tool loops; anything beyond that is treated as a hang.
+const DEFAULT_MAX_DURATION_SECONDS = 900;
+// Grace period between SIGTERM and SIGKILL when the timeout fires.
+const KILL_GRACE_MS = 10_000;
+
+function getMaxDurationMs(): number {
+  const raw = process.env['CLAUDE_MAX_DURATION_SECONDS'];
+  if (!raw) return DEFAULT_MAX_DURATION_SECONDS * 1000;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_DURATION_SECONDS * 1000;
+  return parsed * 1000;
+}
+
 function loadSystemPrompt(): string {
   // Check user-customized prompt first, then default in package root
   const customPath = paths.PROMPT_FILE;
@@ -117,6 +134,23 @@ function runCli(
 
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+
+    const maxDurationMs = getMaxDurationMs();
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      console.warn(
+        `[agent] subprocess exceeded ${maxDurationMs / 1000}s — sending SIGTERM (likely stuck on a long-running command)`,
+      );
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!child.killed) {
+          console.warn('[agent] subprocess still alive after SIGTERM — sending SIGKILL');
+          child.kill('SIGKILL');
+        }
+      }, KILL_GRACE_MS).unref();
+    }, maxDurationMs);
+    timeoutHandle.unref();
 
     child.stdout.on('data', (data: Buffer) => {
       stdout += data.toString();
@@ -127,12 +161,28 @@ function runCli(
     });
 
     child.on('error', (err) => {
+      clearTimeout(timeoutHandle);
       reject(new Error(`Failed to spawn claude CLI: ${err.message}`));
     });
 
     child.on('close', (code) => {
+      clearTimeout(timeoutHandle);
       if (debug && stderr) {
         console.log(`[agent] stderr: ${stderr.trim()}`);
+      }
+
+      if (timedOut) {
+        const minutes = Math.round(maxDurationMs / 60_000);
+        resolve({
+          sessionId: resumeSessionId ?? '',
+          text:
+            `I got stuck for over ${minutes} minutes and had to be terminated. ` +
+            `Most likely cause: a Bash tool call to a long-running process (dev server, watcher, ` +
+            `\`tail -f\`, etc.) that never exits. If you wanted to start a server, ask me to run it ` +
+            `in the background (\`nohup ... > /tmp/log 2>&1 & disown\`) and I'll come back with the PID.`,
+          isError: true,
+        });
+        return;
       }
 
       if (code !== 0 && !stdout.trim()) {

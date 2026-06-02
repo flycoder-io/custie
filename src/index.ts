@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { SocketModeReceiver } from '@slack/bolt';
+import { App, SocketModeReceiver } from '@slack/bolt';
 import { loadConfig } from './config';
 import { paths, ensureDirs } from './paths';
 import { initAutomations } from './automations';
@@ -7,7 +7,37 @@ import { createSlackApp } from './slack/app';
 import { registerListeners } from './slack/listeners';
 import { AutomationRunStore } from './store/automation-run-store';
 import { SessionStore } from './store/session-store';
+import { ReactionStore } from './store/reaction-store';
 import { startWatchdog } from './health/watchdog';
+
+// Max time we wait for in-flight Claude subprocesses to finish posting their
+// reply during shutdown. launchctl kickstart -k waits ~20s before SIGKILL,
+// so keep this comfortably under that.
+const DRAIN_TIMEOUT_MS = 15_000;
+
+// Strip reactions left behind by an unclean exit (deploy, crash). Without this,
+// a `:claude-spark:` "still thinking" indicator can linger on a message even
+// though the bot has stopped working on it long ago.
+async function recoverStaleReactions(
+  client: App['client'],
+  reactionStore: ReactionStore,
+): Promise<void> {
+  const pending = reactionStore.listAll();
+  if (pending.length === 0) return;
+  console.log(`[${ts()}] [custie] clearing ${pending.length} stale reaction(s) from previous run`);
+  for (const r of pending) {
+    try {
+      await client.reactions.remove({
+        channel: r.channelId,
+        timestamp: r.messageTs,
+        name: r.name,
+      });
+    } catch {
+      // already gone, message deleted, missing scope — nothing useful to do.
+    }
+    reactionStore.clearPending(r.channelId, r.messageTs, r.name);
+  }
+}
 
 const ts = () => new Date().toISOString();
 
@@ -93,6 +123,7 @@ export async function startServer(): Promise<void> {
 
   const store = new SessionStore(paths.DB_FILE);
   const runStore = new AutomationRunStore(paths.DB_FILE);
+  const reactionStore = new ReactionStore(paths.DB_FILE);
 
   const app = createSlackApp(config);
 
@@ -114,21 +145,48 @@ export async function startServer(): Promise<void> {
   });
 
   const automations = initAutomations(app, config, runStore);
-  registerListeners(app, store, config, automations.triggerEngine, automations.mentionTriggerEngine);
+  const listeners = registerListeners(
+    app,
+    store,
+    reactionStore,
+    config,
+    automations.triggerEngine,
+    automations.mentionTriggerEngine,
+  );
 
   console.log(`[${ts()}] [custie] starting (pid=${process.pid})`);
   await app.start();
   console.log(`[${ts()}] [custie] started — Socket Mode`);
 
-  const shutdown = () => {
-    console.log(`[${ts()}] [custie] shutting down`);
+  // Best-effort: clean up reactions left by the previous (unclean) shutdown.
+  // Don't block startup if Slack is unreachable.
+  recoverStaleReactions(app.client, reactionStore).catch((err) => {
+    console.warn(`[${ts()}] [custie] reaction recovery failed:`, (err as Error).message);
+  });
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const pending = listeners.pendingCount();
+    console.log(`[${ts()}] [custie] shutting down (${signal}, ${pending} thread queue(s))`);
+    // Let in-flight Claude subprocesses post their reply before we tear down.
+    // Without this, a deploy mid-conversation strands the user with no
+    // response and a stale :claude-spark: reaction.
+    const drained = await listeners.drain(DRAIN_TIMEOUT_MS);
+    if (!drained) {
+      console.warn(
+        `[${ts()}] [custie] drain timed out after ${DRAIN_TIMEOUT_MS}ms — some replies may be lost`,
+      );
+    }
     watchdog.stop();
     automations.shutdown();
     runStore.close();
     store.close();
+    reactionStore.close();
     caffeinate.stop();
     process.exit(0);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
