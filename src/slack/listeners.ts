@@ -1,19 +1,27 @@
 import type { App } from '@slack/bolt';
 import type { Config } from '../config';
 import type { SessionStore } from '../store/session-store';
+import type { ReactionStore } from '../store/reaction-store';
 import type { TriggerEngine } from '../automations/triggers';
 import {
   type MentionTriggerEngine,
   fireMentionTrigger,
 } from '../automations/mention-trigger-engine';
-import { askClaude } from '../claude/agent';
+import { askClaude, type ClaudeResponse } from '../claude/agent';
 import { runAutomation } from '../automations/runner';
 import { resolveCwd } from '../channels';
 import { MessageQueue } from '../queue/message-queue';
 import { toSlackMarkdown, splitMessage } from './formatters';
 import { markdownToBlocks, blockToFallbackText } from './blocks';
 import { downloadSlackFiles, buildFilesPromptSection, type SlackFile } from './file-downloader';
-import { extractButtons, buildActionsBlock, BUTTON_ACTION_ID_PREFIX } from './buttons';
+import {
+  extractButtons,
+  buildActionsBlock,
+  buildRetryBlock,
+  BUTTON_ACTION_ID_PREFIX,
+  RETRY_ACTION_ID_PREFIX,
+  RETRY_BLOCK_ID,
+} from './buttons';
 import { listSkills } from '../claude/skills';
 import {
   parseCommand,
@@ -35,6 +43,22 @@ function getRejectMessage(): string {
   return REJECT_MESSAGES[Math.floor(Math.random() * REJECT_MESSAGES.length)]!;
 }
 const debug = process.env['DEBUG'] === 'true';
+
+// Delay before the automatic single retry after a transient failure.
+const RETRY_DELAY_MS = 1500;
+// Cap on stored retry contexts to keep the in-memory map bounded.
+const MAX_RETRY_CONTEXTS = 50;
+
+// Everything needed to re-run a failed request when the user taps the retry
+// button. Stored in-memory and looked up by a short id embedded in the button.
+interface RetryContext {
+  channelId: string;
+  sessionKey: string;
+  prompt: string;
+  senderId?: string;
+  threadTs?: string;
+  reactTs?: string;
+}
 
 // Emoji added to the triggering message while Claude is working. A reaction is
 // silent — unlike a posted message, it doesn't mark the channel unread or
@@ -181,6 +205,42 @@ async function fetchThreadContext(
 const groupMemberCache = new Map<string, { members: Set<string>; fetchedAt: number }>();
 const GROUP_CACHE_TTL = 10 * 60 * 1000;
 
+// Cache: channel ID → Set of member user IDs (refreshed every 10 minutes).
+// Stored with limit=3 — enough to tell "exactly 2 members" from "3+", which is
+// all we need for the auto-respond check. Invalidated live via
+// member_joined_channel / member_left_channel events when the app is
+// subscribed to them; otherwise the TTL bounds staleness.
+const channelMemberCache = new Map<string, { members: Set<string>; fetchedAt: number }>();
+const CHANNEL_MEMBER_CACHE_TTL = 10 * 60 * 1000;
+
+async function getChannelMembers(
+  client: App['client'],
+  channelId: string,
+): Promise<Set<string>> {
+  const cached = channelMemberCache.get(channelId);
+  if (cached && Date.now() - cached.fetchedAt < CHANNEL_MEMBER_CACHE_TTL) {
+    return cached.members;
+  }
+  try {
+    const res = await client.conversations.members({ channel: channelId, limit: 3 });
+    const members = new Set(res.members ?? []);
+    channelMemberCache.set(channelId, { members, fetchedAt: Date.now() });
+    return members;
+  } catch {
+    return new Set();
+  }
+}
+
+async function isOneOnOneChannel(
+  client: App['client'],
+  channelId: string,
+  senderId: string,
+  botId: string,
+): Promise<boolean> {
+  const members = await getChannelMembers(client, channelId);
+  return members.size === 2 && members.has(botId) && members.has(senderId);
+}
+
 async function isOwnerInSubteam(
   client: App['client'],
   subteamId: string,
@@ -200,13 +260,22 @@ async function isOwnerInSubteam(
   }
 }
 
+export interface ListenerHandles {
+  // Wait for in-flight Claude subprocesses to finish posting their response
+  // before the process exits, up to `timeoutMs`. Resolves to true if drained,
+  // false on timeout.
+  drain(timeoutMs: number): Promise<boolean>;
+  pendingCount(): number;
+}
+
 export function registerListeners(
   app: App,
   store: SessionStore,
+  reactionStore: ReactionStore,
   config: Config,
   triggerEngine?: TriggerEngine,
   mentionTriggerEngine?: MentionTriggerEngine,
-): void {
+): ListenerHandles {
   const {
     claudeCwd,
     claudeConfigDir,
@@ -219,6 +288,23 @@ export function registerListeners(
   } = config;
   const queue = new MessageQueue();
   let botUserId: string | undefined;
+
+  // Pending retry contexts, keyed by a short id embedded in the retry button.
+  // In-memory only: a server restart drops them and the button then reports the
+  // request expired. Capped to avoid unbounded growth.
+  const retryContexts = new Map<string, RetryContext>();
+  let retryCounter = 0;
+  const registerRetry = (ctx: RetryContext): string => {
+    const id = String(++retryCounter);
+    retryContexts.set(id, ctx);
+    // Map preserves insertion order, so the first key is the oldest entry.
+    while (retryContexts.size > MAX_RETRY_CONTEXTS) {
+      const oldest = retryContexts.keys().next().value;
+      if (oldest === undefined) break;
+      retryContexts.delete(oldest);
+    }
+    return id;
+  };
 
   async function ensureBotUserId(client: App['client']): Promise<string> {
     if (botUserId) return botUserId;
@@ -249,6 +335,9 @@ export function registerListeners(
           name: THINKING_REACTION,
         });
         reacted = true;
+        // Persist so startup recovery can clear this if we crash/restart
+        // before clearReaction runs.
+        reactionStore.markPending(channelId, reactTs, THINKING_REACTION);
       } catch (err) {
         if (debug) console.log('[listener] Failed to add thinking reaction:', err);
       }
@@ -265,6 +354,26 @@ export function registerListeners(
       } catch (err) {
         if (debug) console.log('[listener] Failed to remove thinking reaction:', err);
       }
+      // Always drop the pending row, even on remove failure — the reaction is
+      // either gone or we've given up on it; either way, no point retrying on
+      // every future startup.
+      reactionStore.clearPending(channelId, reactTs, THINKING_REACTION);
+    };
+
+    // Posted when a request fails even after the automatic retry. Offers a
+    // button that re-runs the same request on demand.
+    const offerRetry = async (): Promise<void> => {
+      await clearReaction();
+      const retryId = registerRetry({ channelId, sessionKey, prompt, senderId, threadTs, reactTs });
+      const text = '抱歉，連續試了兩次都出錯 😣 點下面的按鈕讓我再試一次。';
+      await say({
+        text,
+        blocks: [
+          { type: 'section', text: { type: 'mrkdwn', text } },
+          buildRetryBlock(retryId),
+        ],
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      } as never);
     };
 
     try {
@@ -283,31 +392,49 @@ export function registerListeners(
       // channels[channelId].cwd ?? CLAUDE_CWD.
       const cwd = resolveCwd(undefined, channelId, claudeCwd);
 
-      const response = await askClaude(
-        enrichedPrompt,
-        cwd,
-        botName,
-        maxTurns,
-        claudeConfigDir,
-        sessionId,
-      );
-      if (response.isError) {
-        if (response.isTransientError) {
-          // Network / 5xx failure — the session file is not poisoned, so keep
-          // the existing sessionId so the next message can --resume and pick
-          // up the full thread context.
-          if (debug) console.log('[handle] transient error, keeping session for resume');
-        } else {
-          // The CLI persists the failed turn into the session file, so any
-          // future --resume on this session would replay the bad turn and fail
-          // again. Drop the session so the next message starts fresh.
-          store.deleteSession(channelId, sessionKey);
-        }
-      } else {
-        store.saveSession(channelId, sessionKey, response.sessionId);
+      // Run the attempt, retrying once on a transient failure (a thrown error,
+      // or a transient API error like a 5xx / network blip). If both attempts
+      // fail, surface a retry button instead of a raw error.
+      let response: ClaudeResponse | null = null;
+      try {
+        response = await askClaude(enrichedPrompt, cwd, botName, maxTurns, claudeConfigDir, sessionId);
+      } catch (err) {
+        if (debug) console.log('[handle] attempt 1 failed:', err);
       }
 
-      const { cleanedText, buttons } = extractButtons(response.text);
+      const isTransientFailure = (r: ClaudeResponse | null): boolean =>
+        !r || (r.isError === true && r.isTransientError === true);
+
+      if (isTransientFailure(response)) {
+        if (debug) console.log('[handle] transient failure — retrying once');
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+        try {
+          response = await askClaude(enrichedPrompt, cwd, botName, maxTurns, claudeConfigDir, sessionId);
+        } catch (err) {
+          if (debug) console.log('[handle] retry attempt failed:', err);
+          response = null;
+        }
+      }
+
+      if (isTransientFailure(response)) {
+        // Still failing after the retry. Transient errors don't poison the
+        // session file, so keep it intact (the retry button will --resume) and
+        // let the user retry on demand.
+        await offerRetry();
+        return;
+      }
+
+      const resolved: ClaudeResponse = response!;
+      if (resolved.isError) {
+        // Non-transient (timeout, or a 4xx baked into the session file): the CLI
+        // persisted the failed turn, so any future --resume would replay the bad
+        // turn and fail again. Drop the session so the next message starts fresh.
+        store.deleteSession(channelId, sessionKey);
+      } else {
+        store.saveSession(channelId, sessionKey, resolved.sessionId);
+      }
+
+      const { cleanedText, buttons } = extractButtons(resolved.text);
       const actionsBlock = buttons ? buildActionsBlock(buttons) : null;
 
       const rtBlocks = markdownToBlocks(cleanedText);
@@ -331,26 +458,36 @@ export function registerListeners(
 
       if (debug) {
         console.log(
-          `[response] length=${response.text.length} messages=${messages.length} buttons=${buttons?.length ?? 0}`,
+          `[response] length=${resolved.text.length} messages=${messages.length} buttons=${buttons?.length ?? 0}`,
         );
       }
 
       // Remove the in-progress reaction, then post the response chunks.
       await clearReaction();
       for (const m of messages) {
+        // Slack rejects chat.postMessage with no_text when `text` is empty,
+        // even if `blocks` carries the visible payload. Happens when Claude
+        // returns only a `[BUTTONS:...]` marker (cleanedText becomes '')
+        // or only whitespace. Skip chunks with no content; otherwise pad
+        // `text` to at least one char.
+        const trimmed = m.text.trim();
+        if (!trimmed && !m.blocks) {
+          if (debug) console.log('[listener] skipping empty response chunk');
+          continue;
+        }
         await say({
-          text: m.text,
+          text: trimmed || ' ',
           ...(m.blocks ? { blocks: m.blocks as never } : {}),
           ...(threadTs ? { thread_ts: threadTs } : {}),
         } as never);
       }
     } catch (err) {
       console.error('[listener] Error handling message:', err);
-      await clearReaction();
-      await say({
-        text: 'Sorry, something went wrong. Please try again.',
-        ...(threadTs ? { thread_ts: threadTs } : {}),
-      } as never);
+      try {
+        await offerRetry();
+      } catch (postErr) {
+        console.error('[listener] Failed to post retry message:', postErr);
+      }
     }
   }
 
@@ -414,19 +551,24 @@ export function registerListeners(
   });
 
   app.event('message', async ({ event, client, say }) => {
-    if (!('text' in event) || !event.text) return;
     if ('bot_id' in event && event.bot_id) return;
     if ('subtype' in event && event.subtype) return;
 
-    // Check event-driven triggers — only for top-level messages (not thread replies)
+    const text = 'text' in event && typeof event.text === 'string' ? event.text : '';
+    const hasFiles =
+      'files' in event && Array.isArray(event.files) && event.files.length > 0;
+    if (!text && !hasFiles) return;
+
+    // Check event-driven triggers — only for top-level messages with text
+    // (triggers match on text patterns, so files-only messages don't trigger).
     const isThreadReply = 'thread_ts' in event && event.thread_ts;
-    if (triggerEngine && !isThreadReply) {
-      const matched = triggerEngine.match(event.text, event.channel);
+    if (triggerEngine && !isThreadReply && text) {
+      const matched = triggerEngine.match(text, event.channel);
       if (matched) {
         triggerEngine.recordFired(matched.name);
         runAutomation({
           name: matched.name,
-          prompt: `Context: A user said "${event.text}" in this channel.\n\n${matched.prompt}`,
+          prompt: `Context: A user said "${text}" in this channel.\n\n${matched.prompt}`,
           channel: event.channel,
           cwd: resolveCwd(undefined, event.channel, config.claudeCwd),
           botName: config.botName,
@@ -440,11 +582,11 @@ export function registerListeners(
     }
 
     // React with eyes emoji when someone mentions the owner (directly or via group)
-    if (ownerUserId) {
-      let ownerMentioned = event.text.includes(`<@${ownerUserId}>`);
+    if (ownerUserId && text) {
+      let ownerMentioned = text.includes(`<@${ownerUserId}>`);
 
       if (!ownerMentioned) {
-        const subteamIds = [...event.text.matchAll(SUBTEAM_MENTION_PATTERN)].map((m) => m[1]!);
+        const subteamIds = [...text.matchAll(SUBTEAM_MENTION_PATTERN)].map((m) => m[1]!);
         for (const subteamId of subteamIds) {
           if (await isOwnerInSubteam(client, subteamId, ownerUserId)) {
             ownerMentioned = true;
@@ -469,14 +611,14 @@ export function registerListeners(
     // Mention triggers — config-driven. Fires when a configured user is tagged
     // in any channel; runs Claude with the trigger's prompt and posts to its
     // target_channel. Different from pattern triggers (text match) above.
-    if (mentionTriggerEngine) {
+    if (mentionTriggerEngine && text) {
       const senderId = ('user' in event ? event.user : undefined) as string | undefined;
       const matched = mentionTriggerEngine.matchAll({
         client,
         channelId: event.channel,
         ts: event.ts,
         threadTs: 'thread_ts' in event ? (event.thread_ts as string | undefined) : undefined,
-        text: event.text,
+        text,
         senderId,
       });
       for (const trigger of matched) {
@@ -487,7 +629,7 @@ export function registerListeners(
             channelId: event.channel,
             ts: event.ts,
             threadTs: 'thread_ts' in event ? (event.thread_ts as string | undefined) : undefined,
-            text: event.text,
+            text,
             senderId,
           },
           {
@@ -508,14 +650,22 @@ export function registerListeners(
       | string
       | undefined;
     const isDM = channelType === 'im';
-    const isAutoRespondChannel = autoRespondChannelIds.has(channelId);
 
     // Outside DMs, Slack also fires `app_mention` for messages that @ the bot.
     // Skip here so app_mention is the sole handler — otherwise we double-process.
+    let botId: string | undefined;
     if (!isDM) {
-      const botId = await ensureBotUserId(client);
-      if (event.text.includes(`<@${botId}>`)) return;
+      botId = await ensureBotUserId(client);
+      if (text.includes(`<@${botId}>`)) return;
     }
+
+    // Auto-respond when the channel is in the configured allow-list, OR when
+    // the channel has exactly two members (the bot + this sender) — i.e. a
+    // private 1-on-1 channel that behaves like a DM.
+    const isAutoRespondChannel =
+      autoRespondChannelIds.has(channelId) ||
+      (!isDM && !!senderId && !!botId &&
+        (await isOneOnOneChannel(client, channelId, senderId, botId)));
 
     // DMs and auto-respond channels: every message starts or continues a session.
     // DMs reply at channel root; auto-respond channels thread under the user's
@@ -532,7 +682,7 @@ export function registerListeners(
         'files' in event ? (event.files as SlackFile[] | undefined) : undefined,
         slackBotToken,
       );
-      const prompt = event.text.trim() + buildFilesPromptSection(downloaded);
+      const prompt = text.trim() + buildFilesPromptSection(downloaded);
       if (!prompt) return;
 
       if (debug) {
@@ -567,7 +717,7 @@ export function registerListeners(
       'files' in event ? (event.files as SlackFile[] | undefined) : undefined,
       slackBotToken,
     );
-    const prompt = event.text.trim() + buildFilesPromptSection(downloaded);
+    const prompt = text.trim() + buildFilesPromptSection(downloaded);
     if (!prompt) return;
 
     const threadKey = `${channelId}:${threadTs}`;
@@ -600,6 +750,18 @@ export function registerListeners(
         event.ts,
       );
     });
+  });
+
+  // Invalidate the channel membership cache the moment Slack tells us
+  // someone joined or left, so 1-on-1 auto-respond flips off as soon as a
+  // third person enters the channel (and on as soon as it becomes 1-on-1).
+  // If the app isn't subscribed to these events the handlers never fire and
+  // the cache TTL is the upper bound on staleness.
+  app.event('member_joined_channel', async ({ event }) => {
+    channelMemberCache.delete(event.channel);
+  });
+  app.event('member_left_channel', async ({ event }) => {
+    channelMemberCache.delete(event.channel);
   });
 
   // Quick-reply button clicks. Strip the actions block from the original
@@ -674,6 +836,102 @@ export function registerListeners(
         session?.sessionId,
         threadTs,
         message.ts,
+      );
+    });
+  });
+
+  // Retry button clicks (shown after two consecutive failures). Look up the
+  // stored request and re-run it, resuming the session if one still exists.
+  app.action(new RegExp(`^${RETRY_ACTION_ID_PREFIX}`), async ({ body, ack, client }) => {
+    await ack();
+
+    if (body.type !== 'block_actions') return;
+    const action = body.actions?.[0];
+    if (!action || action.type !== 'button') return;
+
+    const userId = body.user?.id;
+    if (allowedUserIds.size > 0 && (!userId || !allowedUserIds.has(userId))) return;
+
+    const channelId = body.channel?.id;
+    const message = body.message as
+      | {
+          ts: string;
+          thread_ts?: string;
+          blocks?: Array<{ type: string; block_id?: string }>;
+          text?: string;
+        }
+      | undefined;
+    if (!channelId || !message) return;
+
+    const retryId = (action.value ?? '').trim();
+    const ctx = retryId ? retryContexts.get(retryId) : undefined;
+
+    // Strip the retry button from the original message; we replace it with a
+    // status line below.
+    const remainingBlocks = (message.blocks ?? []).filter(
+      (b) => !(b.type === 'actions' && b.block_id?.startsWith(RETRY_BLOCK_ID)),
+    );
+
+    if (!ctx) {
+      // Context gone — server restarted, or the button was already used. Expire
+      // it so it can't be tapped again.
+      try {
+        await client.chat.update({
+          channel: channelId,
+          ts: message.ts,
+          text: message.text ?? '重試已逾時',
+          blocks: [
+            ...remainingBlocks,
+            {
+              type: 'context',
+              elements: [{ type: 'mrkdwn', text: '⌛ 這個重試已逾時，請直接重新傳一次訊息。' }],
+            },
+          ] as never,
+        });
+      } catch (err) {
+        if (debug) console.log('[retry] failed to expire button:', err);
+      }
+      return;
+    }
+
+    retryContexts.delete(retryId);
+
+    try {
+      await client.chat.update({
+        channel: channelId,
+        ts: message.ts,
+        text: message.text ?? '重試中…',
+        blocks: [
+          ...remainingBlocks,
+          { type: 'context', elements: [{ type: 'mrkdwn', text: '🔄 重試中…' }] },
+        ] as never,
+      });
+    } catch (err) {
+      if (debug) console.log('[retry] failed to update message:', err);
+    }
+
+    const sayInThread = async (msg: { text: string; thread_ts?: string }) => {
+      await client.chat.postMessage({ channel: channelId, ...msg });
+    };
+
+    const threadKey = `${channelId}:${ctx.sessionKey}`;
+    queue.enqueue(threadKey, async () => {
+      const session = store.getSession(channelId, ctx.sessionKey);
+      if (debug) {
+        console.log(
+          `[retry] user=${userId} channel=${channelId} thread=${ctx.threadTs ?? '(root)'} resume=${session?.sessionId ?? 'none'}`,
+        );
+      }
+      await handleMessage(
+        client,
+        sayInThread,
+        channelId,
+        ctx.sessionKey,
+        ctx.prompt,
+        ctx.senderId,
+        session?.sessionId,
+        ctx.threadTs,
+        ctx.reactTs,
       );
     });
   });
@@ -773,4 +1031,9 @@ export function registerListeners(
       );
     });
   });
+
+  return {
+    drain: (timeoutMs) => queue.drain(timeoutMs),
+    pendingCount: () => queue.pendingCount(),
+  };
 }
