@@ -24,9 +24,17 @@ export interface ChannelAutomations {
   mention_triggers?: NestedMentionTrigger[];
 }
 
+/**
+ * Per-channel access widening, layered on top of the global ALLOWED_USER_IDS
+ * list. `'open'` (also `'*'` / `'all'`) opens the channel to everyone; an array
+ * allows the listed Slack user IDs. Absent = no widening (global list applies).
+ */
+export type ChannelAccess = 'open' | '*' | 'all' | string[];
+
 export interface ChannelEntry {
   name?: string;
   cwd: string;
+  access?: ChannelAccess;
   automations?: ChannelAutomations;
 }
 
@@ -104,6 +112,25 @@ export function resolveChannelCwd(channelId: string | undefined): string | undef
     return undefined;
   }
   return entry.cwd;
+}
+
+/**
+ * Whether `channels.yml` grants `userId` access to `channelId` beyond the
+ * global ALLOWED_USER_IDS list. An `access: open` channel admits everyone; an
+ * `access` array admits the listed user IDs. Returns false when the channel has
+ * no `access` rule, so callers fall back to the global allow-list.
+ */
+export function isChannelAccessAllowed(
+  channelId: string | undefined,
+  userId: string | undefined,
+): boolean {
+  if (!channelId) return false;
+  const access = registry[channelId]?.access;
+  if (!access) return false;
+  if (typeof access === 'string') {
+    return access === 'open' || access === '*' || access === 'all';
+  }
+  return !!userId && access.includes(userId);
 }
 
 /**
