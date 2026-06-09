@@ -14,6 +14,11 @@ export interface ClaudeResponse {
    * (e.g. a 4xx replaying on every resume) and the caller should drop it.
    */
   isTransientError?: boolean;
+  /**
+   * True when the resumed session exceeded the context window. The caller
+   * should drop the session and retry fresh, optionally with thread context.
+   */
+  isContextTooLong?: boolean;
 }
 
 const debug = process.env['DEBUG'] === 'true';
@@ -29,6 +34,18 @@ const TRANSIENT_ERROR_PATTERNS = [
   /socket hang up/i,
   /network/i,
 ];
+
+const CONTEXT_TOO_LONG_PATTERNS = [
+  /prompt is too long/i,
+  /context.{0,20}too long/i,
+  /too many tokens/i,
+  /context length exceeded/i,
+  /maximum context length/i,
+];
+
+function isContextTooLongError(text: string): boolean {
+  return CONTEXT_TOO_LONG_PATTERNS.some((p) => p.test(text));
+}
 
 function isTransientError(text: string, apiErrorStatus: number | null | undefined): boolean {
   // No HTTP status usually means the request never reached the API (DNS,
@@ -281,7 +298,13 @@ export async function askClaude(
   resumeSessionId?: string,
 ): Promise<ClaudeResponse> {
   try {
-    return await runCli(prompt, cwd, botName, options, claudeConfigDir, resumeSessionId);
+    const response = await runCli(prompt, cwd, botName, options, claudeConfigDir, resumeSessionId);
+    // Signal the caller to drop the session and retry with thread context.
+    if (resumeSessionId && response.isError && isContextTooLongError(response.text)) {
+      if (debug) console.log('[agent] context too long on resume — signalling caller');
+      return { ...response, isContextTooLong: true };
+    }
+    return response;
   } catch (err) {
     if (resumeSessionId) {
       if (debug) console.log(`[agent] session resume failed, starting fresh session`);
