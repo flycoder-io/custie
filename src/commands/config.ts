@@ -41,6 +41,8 @@ function printConfig(): void {
     'ALLOWED_USER_IDS',
     'OWNER_USER_ID',
     'MAX_TURNS',
+    'CUSTIE_MODEL',
+    'MAX_BUDGET_USD',
   ];
 
   console.log('\n  Environment:');
