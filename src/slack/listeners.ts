@@ -9,7 +9,7 @@ import {
 } from '../automations/mention-trigger-engine';
 import { askClaude, type ClaudeResponse } from '../claude/agent';
 import { runAutomation } from '../automations/runner';
-import { resolveCwd } from '../channels';
+import { resolveCwd, isChannelAccessAllowed } from '../channels';
 import { MessageQueue } from '../queue/message-queue';
 import { toSlackMarkdown, splitMessage } from './formatters';
 import { markdownToBlocks, blockToFallbackText } from './blocks';
@@ -290,6 +290,18 @@ export function registerListeners(
   const queue = new MessageQueue();
   let botUserId: string | undefined;
 
+  // Access gate. The global ALLOWED_USER_IDS list applies everywhere; an empty
+  // list means open to everyone. `channels.yml` `access` rules widen that list
+  // per channel (whole-channel `open`, or a per-channel user allow-list).
+  const isAccessAllowed = (
+    userId: string | undefined,
+    channelId: string | undefined,
+  ): boolean => {
+    if (allowedUserIds.size === 0) return true;
+    if (userId && allowedUserIds.has(userId)) return true;
+    return isChannelAccessAllowed(channelId, userId);
+  };
+
   // Pending retry contexts, keyed by a short id embedded in the retry button.
   // In-memory only: a server restart drops them and the button then reports the
   // request expired. Capped to avoid unbounded growth.
@@ -403,6 +415,23 @@ export function registerListeners(
         if (debug) console.log('[handle] attempt 1 failed:', err);
       }
 
+      // Session history too long — drop it, rebuild thread context, retry fresh.
+      if (response?.isContextTooLong) {
+        store.deleteSession(channelId, sessionKey);
+        let freshPrompt = enrichedPrompt;
+        if (threadTs) {
+          const uid = await ensureBotUserId(client);
+          const threadCtx = await fetchThreadContext(client, channelId, threadTs, uid);
+          if (threadCtx) freshPrompt = threadCtx + enrichedPrompt;
+        }
+        response = null;
+        try {
+          response = await askClaude(freshPrompt, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir);
+        } catch (err) {
+          if (debug) console.log('[handle] context-too-long retry failed:', err);
+        }
+      }
+
       const isTransientFailure = (r: ClaudeResponse | null): boolean =>
         !r || (r.isError === true && r.isTransientError === true);
 
@@ -498,7 +527,7 @@ export function registerListeners(
     const threadKey = `${channelId}:${threadTs}`;
 
     if (!event.user) return;
-    if (allowedUserIds.size > 0 && !allowedUserIds.has(event.user)) {
+    if (!isAccessAllowed(event.user, channelId)) {
       await say({ text: getRejectMessage(), thread_ts: threadTs });
       return;
     }
@@ -553,7 +582,11 @@ export function registerListeners(
 
   app.event('message', async ({ event, client, say }) => {
     if ('bot_id' in event && event.bot_id) return;
-    if ('subtype' in event && event.subtype) return;
+    // Drop edits/deletes/etc., but let `file_share` through — a bare image (or
+    // image + caption) posted without an @mention arrives as a `file_share`
+    // message, and we want auto-respond/DM/1-on-1 channels to handle it.
+    const subtype = 'subtype' in event ? event.subtype : undefined;
+    if (subtype && subtype !== 'file_share') return;
 
     const text = 'text' in event && typeof event.text === 'string' ? event.text : '';
     const hasFiles =
@@ -646,7 +679,7 @@ export function registerListeners(
     }
 
     const senderId = ('user' in event ? event.user : undefined) as string | undefined;
-    if (allowedUserIds.size > 0 && (!senderId || !allowedUserIds.has(senderId))) return;
+    if (!isAccessAllowed(senderId, event.channel)) return;
 
     const channelId = event.channel;
     const channelType = ('channel_type' in event ? event.channel_type : undefined) as
@@ -778,9 +811,9 @@ export function registerListeners(
     if (!action || action.type !== 'button') return;
 
     const userId = body.user?.id;
-    if (allowedUserIds.size > 0 && (!userId || !allowedUserIds.has(userId))) return;
-
     const channelId = body.channel?.id;
+    if (!isAccessAllowed(userId, channelId)) return;
+
     const message = body.message as
       | {
           ts: string;
@@ -853,9 +886,9 @@ export function registerListeners(
     if (!action || action.type !== 'button') return;
 
     const userId = body.user?.id;
-    if (allowedUserIds.size > 0 && (!userId || !allowedUserIds.has(userId))) return;
-
     const channelId = body.channel?.id;
+    if (!isAccessAllowed(userId, channelId)) return;
+
     const message = body.message as
       | {
           ts: string;
@@ -945,7 +978,7 @@ export function registerListeners(
   app.command('/custie', async ({ command, ack, respond }) => {
     await ack();
 
-    if (allowedUserIds.size > 0 && !allowedUserIds.has(command.user_id)) {
+    if (!isAccessAllowed(command.user_id, command.channel_id)) {
       await respond({ response_type: 'ephemeral', text: getRejectMessage() });
       return;
     }
@@ -989,9 +1022,9 @@ export function registerListeners(
     if (!action || action.type !== 'static_select') return;
 
     const userId = body.user?.id;
-    if (allowedUserIds.size > 0 && (!userId || !allowedUserIds.has(userId))) return;
-
     const channelId = body.channel?.id;
+    if (!isAccessAllowed(userId, channelId)) return;
+
     const skillName = action.selected_option?.value?.trim();
     if (!channelId || !skillName) return;
 
