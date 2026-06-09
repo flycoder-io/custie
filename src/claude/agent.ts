@@ -81,7 +81,17 @@ function buildSystemPrompt(botName: string): string {
   return capabilities ? `${prompt}\n\n${capabilities}` : prompt;
 }
 
-function buildArgs(prompt: string, botName: string, resumeSessionId?: string): string[] {
+interface CliOptions {
+  model?: string;
+  maxBudgetUsd?: number;
+}
+
+function buildArgs(
+  prompt: string,
+  botName: string,
+  options: CliOptions,
+  resumeSessionId?: string,
+): string[] {
   const args = [
     '--print',
     '--output-format',
@@ -93,6 +103,18 @@ function buildArgs(prompt: string, botName: string, resumeSessionId?: string): s
     '--setting-sources',
     'user,project,local',
   ];
+
+  // Model selection (cost lever): defaults to a cheaper model upstream; only
+  // passed when set so an empty value falls back to the CLI default.
+  if (options.model) {
+    args.push('--model', options.model);
+  }
+
+  // Per-invocation spend cap: a runaway backstop. The CLI ends the turn once
+  // this dollar amount is reached rather than looping indefinitely.
+  if (options.maxBudgetUsd && options.maxBudgetUsd > 0) {
+    args.push('--max-budget-usd', String(options.maxBudgetUsd));
+  }
 
   if (resumeSessionId) {
     args.push('--resume', resumeSessionId);
@@ -107,11 +129,12 @@ function runCli(
   prompt: string,
   cwd: string,
   botName: string,
+  options: CliOptions,
   claudeConfigDir?: string,
   resumeSessionId?: string,
 ): Promise<ClaudeResponse> {
   return new Promise((resolve, reject) => {
-    const args = buildArgs(prompt, botName, resumeSessionId);
+    const args = buildArgs(prompt, botName, options, resumeSessionId);
     const env = { ...process.env };
     if (claudeConfigDir) {
       env['CLAUDE_CONFIG_DIR'] = claudeConfigDir;
@@ -253,16 +276,16 @@ export async function askClaude(
   prompt: string,
   cwd: string,
   botName: string,
-  _maxTurns: number,
+  options: CliOptions,
   claudeConfigDir?: string,
   resumeSessionId?: string,
 ): Promise<ClaudeResponse> {
   try {
-    return await runCli(prompt, cwd, botName, claudeConfigDir, resumeSessionId);
+    return await runCli(prompt, cwd, botName, options, claudeConfigDir, resumeSessionId);
   } catch (err) {
     if (resumeSessionId) {
       if (debug) console.log(`[agent] session resume failed, starting fresh session`);
-      return await runCli(prompt, cwd, botName, claudeConfigDir);
+      return await runCli(prompt, cwd, botName, options, claudeConfigDir);
     }
     throw err;
   }

@@ -81,7 +81,8 @@ export async function fireMentionTrigger(
   event: MentionEventInput,
   config: {
     botName: string;
-    maxTurns: number;
+    model: string;
+    maxBudgetUsd?: number;
     claudeConfigDir?: string;
     claudeCwd: string;
   },
@@ -175,7 +176,8 @@ export async function fireMentionTrigger(
     channel: trigger.target_channel,
     cwd: resolveCwd(undefined, trigger.target_channel, config.claudeCwd),
     botName: config.botName,
-    maxTurns: config.maxTurns,
+    model: config.model,
+    maxBudgetUsd: config.maxBudgetUsd,
     claudeConfigDir: config.claudeConfigDir,
     slackClient: client,
   });
