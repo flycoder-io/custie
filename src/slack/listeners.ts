@@ -281,7 +281,8 @@ export function registerListeners(
     claudeConfigDir,
     botName,
     allowedUserIds,
-    maxTurns,
+    model,
+    maxBudgetUsd,
     ownerUserId,
     slackBotToken,
     autoRespondChannelIds,
@@ -397,7 +398,7 @@ export function registerListeners(
       // fail, surface a retry button instead of a raw error.
       let response: ClaudeResponse | null = null;
       try {
-        response = await askClaude(enrichedPrompt, cwd, botName, maxTurns, claudeConfigDir, sessionId);
+        response = await askClaude(enrichedPrompt, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir, sessionId);
       } catch (err) {
         if (debug) console.log('[handle] attempt 1 failed:', err);
       }
@@ -409,7 +410,7 @@ export function registerListeners(
         if (debug) console.log('[handle] transient failure — retrying once');
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
         try {
-          response = await askClaude(enrichedPrompt, cwd, botName, maxTurns, claudeConfigDir, sessionId);
+          response = await askClaude(enrichedPrompt, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir, sessionId);
         } catch (err) {
           if (debug) console.log('[handle] retry attempt failed:', err);
           response = null;
@@ -572,7 +573,8 @@ export function registerListeners(
           channel: event.channel,
           cwd: resolveCwd(undefined, event.channel, config.claudeCwd),
           botName: config.botName,
-          maxTurns: config.maxTurns,
+          model: config.model,
+          maxBudgetUsd: config.maxBudgetUsd,
           claudeConfigDir: config.claudeConfigDir,
           slackClient: client,
           threadTs: event.ts,
@@ -634,7 +636,8 @@ export function registerListeners(
           },
           {
             botName: config.botName,
-            maxTurns: config.maxTurns,
+            model: config.model,
+            maxBudgetUsd: config.maxBudgetUsd,
             claudeConfigDir: config.claudeConfigDir,
             claudeCwd: config.claudeCwd,
           },

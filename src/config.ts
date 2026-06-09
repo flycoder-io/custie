@@ -12,6 +12,12 @@ export interface Config {
   botName: string;
   allowedUserIds: Set<string>;
   maxTurns: number;
+  /** Model passed to the Claude CLI (`--model`). Defaults to 'sonnet' to keep
+   * programmatic usage cheap; set CUSTIE_MODEL=opus to restore Opus quality. */
+  model: string;
+  /** Per-invocation spend cap passed to the CLI (`--max-budget-usd`). A runaway
+   * backstop, not a target. Empty/0 disables the cap. */
+  maxBudgetUsd?: number;
   ownerUserId?: string;
   autoRespondChannelIds: Set<string>;
 }
@@ -33,6 +39,16 @@ export function loadEnvFiles(): void {
   if (existsSync(repoEnv)) {
     dotenv.config({ path: repoEnv, override: false });
   }
+}
+
+/** Per-call spend cap in USD. Defaults to a generous runaway backstop ($5);
+ * set MAX_BUDGET_USD=0 to disable. With the default 'sonnet' model this is far
+ * above any normal Slack reply, so it only catches stuck loops. */
+function parseBudget(raw: string | undefined): number | undefined {
+  if (raw === undefined) return 5;
+  const n = Number.parseFloat(raw);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n;
 }
 
 function requireEnv(name: string): string {
@@ -68,6 +84,8 @@ export function loadConfig(): Config {
     botName: process.env['BOT_NAME'] ?? 'Custie',
     allowedUserIds,
     maxTurns: parseInt(process.env['MAX_TURNS'] ?? '10', 10),
+    model: process.env['CUSTIE_MODEL']?.trim() || 'sonnet',
+    maxBudgetUsd: parseBudget(process.env['MAX_BUDGET_USD']),
     ownerUserId,
     autoRespondChannelIds,
   };

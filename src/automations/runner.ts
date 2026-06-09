@@ -10,7 +10,8 @@ export interface RunAutomationOpts {
   channel: string;
   cwd: string;
   botName: string;
-  maxTurns: number;
+  model: string;
+  maxBudgetUsd?: number;
   claudeConfigDir?: string;
   slackClient: App['client'];
   threadTs?: string;
@@ -18,7 +19,7 @@ export interface RunAutomationOpts {
 }
 
 export async function runAutomation(opts: RunAutomationOpts): Promise<void> {
-  const { name, prompt, channel, cwd, botName, maxTurns, claudeConfigDir, slackClient, threadTs, silent } = opts;
+  const { name, prompt, channel, cwd, botName, model, maxBudgetUsd, claudeConfigDir, slackClient, threadTs, silent } = opts;
 
   // Prefix lets Claude detect it's running as a scheduled automation (vs an
   // interactive Slack message). system.capabilities.md teaches it that in this
@@ -27,7 +28,13 @@ export async function runAutomation(opts: RunAutomationOpts): Promise<void> {
 
   try {
     const channelId = await resolveChannelId(slackClient, channel);
-    const response = await askClaude(automationPrefix + prompt, cwd, botName, maxTurns, claudeConfigDir);
+    const response = await askClaude(
+      automationPrefix + prompt,
+      cwd,
+      botName,
+      { model, maxBudgetUsd },
+      claudeConfigDir,
+    );
 
     // In silent mode, Claude handles posting via custie slack post in the prompt
     if (silent) return;
