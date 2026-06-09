@@ -415,6 +415,23 @@ export function registerListeners(
         if (debug) console.log('[handle] attempt 1 failed:', err);
       }
 
+      // Session history too long — drop it, rebuild thread context, retry fresh.
+      if (response?.isContextTooLong) {
+        store.deleteSession(channelId, sessionKey);
+        let freshPrompt = enrichedPrompt;
+        if (threadTs) {
+          const uid = await ensureBotUserId(client);
+          const threadCtx = await fetchThreadContext(client, channelId, threadTs, uid);
+          if (threadCtx) freshPrompt = threadCtx + enrichedPrompt;
+        }
+        response = null;
+        try {
+          response = await askClaude(freshPrompt, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir);
+        } catch (err) {
+          if (debug) console.log('[handle] context-too-long retry failed:', err);
+        }
+      }
+
       const isTransientFailure = (r: ClaudeResponse | null): boolean =>
         !r || (r.isError === true && r.isTransientError === true);
 
