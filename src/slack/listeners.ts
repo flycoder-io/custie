@@ -415,20 +415,42 @@ export function registerListeners(
         if (debug) console.log('[handle] attempt 1 failed:', err);
       }
 
-      // Session history too long — drop it, rebuild thread context, retry fresh.
+      // Context too long — progressively shed context and retry fresh.
       if (response?.isContextTooLong) {
         store.deleteSession(channelId, sessionKey);
-        let freshPrompt = enrichedPrompt;
-        if (threadTs) {
+
+        const tryAskFresh = async (p: string): Promise<ClaudeResponse | null> => {
+          try {
+            return await askClaude(p, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir);
+          } catch {
+            return null;
+          }
+        };
+
+        // Step 1: if we had a session (prompt has no thread context), add it for continuity.
+        if (sessionId && threadTs) {
           const uid = await ensureBotUserId(client);
-          const threadCtx = await fetchThreadContext(client, channelId, threadTs, uid);
-          if (threadCtx) freshPrompt = threadCtx + enrichedPrompt;
+          const ctx = await fetchThreadContext(client, channelId, threadTs, uid);
+          if (ctx) response = await tryAskFresh(ctx + enrichedPrompt);
         }
-        response = null;
-        try {
-          response = await askClaude(freshPrompt, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir);
-        } catch (err) {
-          if (debug) console.log('[handle] context-too-long retry failed:', err);
+
+        // Step 2: strip thread context from prompt and retry bare.
+        if (!response || response.isContextTooLong) {
+          const bare = enrichedPrompt.replace(
+            /\[thread context[^\]]*\][\s\S]*?\[end thread context\]\n*/g,
+            '',
+          );
+          response = await tryAskFresh(bare);
+        }
+
+        // All retries exhausted — conversation is too long to continue.
+        if (!response || response.isContextTooLong) {
+          await clearReaction();
+          await say({
+            text: '這個對話太長了，沒辦法繼續處理 :pensive: 請另開一個新的 thread，我可以繼續幫你。',
+            ...(threadTs ? { thread_ts: threadTs } : {}),
+          });
+          return;
         }
       }
 
@@ -1065,6 +1087,113 @@ export function registerListeners(
         intro.ts,
         intro.ts,
       );
+    });
+  });
+
+  // "Fork thread" message shortcut. Summarises the current session (or Slack
+  // thread messages as fallback) and opens a new root-level thread in the same
+  // channel with the summary as context.
+  app.shortcut('custie_fork', async ({ shortcut, ack, client }) => {
+    await ack();
+
+    if (shortcut.type !== 'message_action') return;
+
+    const userId = shortcut.user.id;
+    const channelId = shortcut.channel.id;
+    if (!isAccessAllowed(userId, channelId)) return;
+
+    // Resolve thread root: if the shortcut was invoked on a reply, thread_ts
+    // is the root; if invoked on the root itself, fall back to message ts.
+    const messageTs = shortcut.message.ts;
+    const threadTs = (shortcut.message as { thread_ts?: string }).thread_ts ?? messageTs;
+
+    const session = store.getSession(channelId, threadTs);
+    const cwd = resolveCwd(undefined, channelId, claudeCwd);
+
+    const FORK_PROMPT =
+      'Please summarise this conversation concisely for a forked thread. Include:\n' +
+      '- Key topics and context\n' +
+      '- Decisions or conclusions reached\n' +
+      '- Open questions / next steps\n\n' +
+      'Keep it brief — this will be the opening message of the new thread.';
+
+    // Primary path: resume existing Claude session to generate the summary.
+    let summaryResponse: ClaudeResponse | null = null;
+    if (session?.sessionId) {
+      try {
+        summaryResponse = await askClaude(
+          FORK_PROMPT,
+          cwd,
+          botName,
+          { model, maxBudgetUsd },
+          claudeConfigDir,
+          session.sessionId,
+        );
+        if (summaryResponse.isError) summaryResponse = null;
+      } catch {
+        summaryResponse = null;
+      }
+    }
+
+    // Fallback: compile Slack thread messages and summarise from scratch.
+    if (!summaryResponse) {
+      const botId = await ensureBotUserId(client);
+      const threadContext = await fetchThreadContext(client, channelId, threadTs, botId);
+      if (!threadContext) {
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: userId,
+          text: '找不到這個 thread 的對話內容，無法 fork。',
+        });
+        return;
+      }
+      try {
+        summaryResponse = await askClaude(
+          threadContext + '\n\n' + FORK_PROMPT,
+          cwd,
+          botName,
+          { model, maxBudgetUsd },
+          claudeConfigDir,
+        );
+        if (summaryResponse.isError) summaryResponse = null;
+      } catch {
+        summaryResponse = null;
+      }
+    }
+
+    if (!summaryResponse) {
+      await client.chat.postEphemeral({
+        channel: channelId,
+        user: userId,
+        text: '摘要產生失敗，請稍後再試。',
+      });
+      return;
+    }
+
+    // Post summary as a new root-level message (no thread_ts = new thread root).
+    const rtBlocks = markdownToBlocks(summaryResponse.text);
+    const newMsg = rtBlocks.length > 0
+      ? await client.chat.postMessage({
+          channel: channelId,
+          text: blockToFallbackText(rtBlocks[0]!),
+          blocks: rtBlocks as never,
+        })
+      : await client.chat.postMessage({
+          channel: channelId,
+          text: toSlackMarkdown(summaryResponse.text),
+        });
+
+    const newTs = (newMsg as { ts: string }).ts;
+    const newTsForLink = newTs.replace('.', '');
+    const authInfo = await client.auth.test();
+    const workspaceUrl = (authInfo.url as string).replace(/\/$/, '');
+    const permalink = `${workspaceUrl}/archives/${channelId}/p${newTsForLink}`;
+
+    // Notify the original thread.
+    await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: `🍴 Forked → <${permalink}>`,
     });
   });
 
