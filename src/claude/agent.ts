@@ -28,6 +28,13 @@ export interface ClaudeResponse {
    * the normal non-transient path drops it then.
    */
   isTimeout?: boolean;
+  /**
+   * True when the run was deliberately aborted via an AbortSignal (the user
+   * sent a cancel keyword). This is NOT a failure: the caller must not retry,
+   * self-heal, drop the session, or post anything. Distinct from isTimeout
+   * (wall-clock kill) and isError (upstream failure).
+   */
+  isCancelled?: boolean;
 }
 
 const debug = process.env['DEBUG'] === 'true';
@@ -112,6 +119,7 @@ function buildSystemPrompt(botName: string): string {
 interface CliOptions {
   model?: string;
   maxBudgetUsd?: number;
+  signal?: AbortSignal;
 }
 
 // PreToolUse(Bash) guard injected ONLY into Custie's CLI invocations (not the
@@ -208,12 +216,10 @@ function runCli(
     let stderr = '';
     let timedOut = false;
 
-    const maxDurationMs = getMaxDurationMs();
-    const timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      console.warn(
-        `[agent] subprocess exceeded ${maxDurationMs / 1000}s — sending SIGTERM (likely stuck on a long-running command)`,
-      );
+    // Shared SIGTERM -> grace -> SIGKILL sequence, used by both the wall-clock
+    // timeout and the abort-signal (cancel keyword) paths.
+    const killChild = (reason: string): void => {
+      console.warn(`[agent] killing subprocess (${reason}) — sending SIGTERM`);
       child.kill('SIGTERM');
       setTimeout(() => {
         if (!child.killed) {
@@ -221,8 +227,34 @@ function runCli(
           child.kill('SIGKILL');
         }
       }, KILL_GRACE_MS).unref();
+    };
+
+    const maxDurationMs = getMaxDurationMs();
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      killChild(`exceeded ${maxDurationMs / 1000}s, likely stuck on a long-running command`);
     }, maxDurationMs);
     timeoutHandle.unref();
+
+    // Cancellation via AbortSignal (user sent a cancel keyword). Mirrors the
+    // timeout path but resolves with isCancelled instead of isTimeout.
+    let cancelled = false;
+    const signal = options.signal;
+    const onAbort = (): void => {
+      cancelled = true;
+      killChild('aborted by user');
+    };
+    if (signal) {
+      if (signal.aborted) {
+        // Already aborted before we even started listening.
+        onAbort();
+      } else {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
+    const removeAbortListener = (): void => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
 
     child.stdout.on('data', (data: Buffer) => {
       stdout += data.toString();
@@ -234,13 +266,24 @@ function runCli(
 
     child.on('error', (err) => {
       clearTimeout(timeoutHandle);
+      removeAbortListener();
       reject(new Error(`Failed to spawn claude CLI: ${err.message}`));
     });
 
     child.on('close', (code) => {
       clearTimeout(timeoutHandle);
+      removeAbortListener();
       if (debug && stderr) {
         console.log(`[agent] stderr: ${stderr.trim()}`);
+      }
+
+      if (cancelled) {
+        resolve({
+          sessionId: resumeSessionId ?? '',
+          text: '',
+          isCancelled: true,
+        });
+        return;
       }
 
       if (timedOut) {
