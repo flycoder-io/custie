@@ -54,7 +54,7 @@ export function initAutomations(
           channel: schedule.channel,
           cwd: resolveCwd(schedule.cwd, schedule.channel, config.claudeCwd),
           botName: config.botName,
-          model: config.model,
+          model: schedule.model?.trim() || config.model,
           maxBudgetUsd: config.maxBudgetUsd,
           claudeConfigDir: config.claudeConfigDir,
           slackClient: app.client,

@@ -14,6 +14,12 @@ export interface ScheduleAutomation {
   channel: string;
   timezone?: string;
   cwd?: string;
+  /**
+   * Per-automation Claude model (`--model`, e.g. `opus` / `haiku`). Lets heavy
+   * automations use a stronger model and routine polling/digests use a cheaper
+   * one. Absent = fall back to the global CUSTIE_MODEL.
+   */
+  model?: string;
   catchup?: boolean;
   silent?: boolean;
   created_by?: string;
@@ -28,6 +34,8 @@ export interface TriggerAutomation {
   require_mention: boolean;
   cooldown: number;
   prompt: string;
+  /** Per-automation Claude model override; absent = global CUSTIE_MODEL. */
+  model?: string;
   created_by?: string;
   created_at?: string;
 }
@@ -54,6 +62,8 @@ export interface MentionTrigger {
   // Restrict to certain source channels. Empty/undefined = listen everywhere.
   source_channels?: string[];
   prompt: string;
+  /** Per-automation Claude model override; absent = global CUSTIE_MODEL. */
+  model?: string;
   created_by?: string;
   created_at?: string;
 }

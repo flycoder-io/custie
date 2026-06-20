@@ -12,11 +12,30 @@ const SUPPORTED_IMAGE_MIMETYPES = new Set([
   'image/webp',
 ]);
 
+const SUPPORTED_TEXT_MIMETYPES = new Set([
+  'text/plain',
+  'text/html',
+  'text/csv',
+  'text/xml',
+  'text/markdown',
+  'text/javascript',
+  'text/typescript',
+  'text/css',
+  'image/svg+xml',
+  'application/json',
+  'application/xml',
+  'application/pdf',
+]);
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+const MAX_TEXT_BYTES = 500 * 1024; // 500KB
+
 export interface SlackFile {
   id?: string;
   name?: string;
   mimetype?: string;
   filetype?: string;
+  size?: number;
   url_private_download?: string;
   url_private?: string;
 }
@@ -30,7 +49,7 @@ export interface DownloadedFile {
 export interface SkippedFile {
   name: string;
   mimetype?: string;
-  reason: 'unsupported' | 'download_failed' | 'no_url';
+  reason: 'unsupported' | 'download_failed' | 'no_url' | 'too_large';
 }
 
 export interface DownloadResult {
@@ -55,11 +74,27 @@ async function downloadOne(file: SlackFile, botToken: string): Promise<DownloadO
   if (!url || !file.mimetype) {
     return { kind: 'skip', skipped: { name: describeFile(file), reason: 'no_url' } };
   }
-  if (!SUPPORTED_IMAGE_MIMETYPES.has(file.mimetype)) {
+
+  const isImage = SUPPORTED_IMAGE_MIMETYPES.has(file.mimetype);
+  const isText = SUPPORTED_TEXT_MIMETYPES.has(file.mimetype);
+
+  if (!isImage && !isText) {
     if (debug) console.log(`[file-downloader] skipping unsupported mimetype: ${file.mimetype}`);
     return {
       kind: 'skip',
       skipped: { name: describeFile(file), mimetype: file.mimetype, reason: 'unsupported' },
+    };
+  }
+
+  const sizeLimit = isImage ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES;
+  if (file.size !== undefined && file.size > sizeLimit) {
+    if (debug)
+      console.log(
+        `[file-downloader] skipping oversized file: ${file.name} (${file.size} > ${sizeLimit})`,
+      );
+    return {
+      kind: 'skip',
+      skipped: { name: describeFile(file), mimetype: file.mimetype, reason: 'too_large' },
     };
   }
 
@@ -78,7 +113,31 @@ async function downloadOne(file: SlackFile, botToken: string): Promise<DownloadO
       };
     }
 
+    const contentLength = Number(response.headers.get('content-length') ?? 0);
+    if (contentLength > sizeLimit) {
+      if (debug)
+        console.log(
+          `[file-downloader] skipping oversized file (content-length): ${file.name} (${contentLength} > ${sizeLimit})`,
+        );
+      return {
+        kind: 'skip',
+        skipped: { name: describeFile(file), mimetype: file.mimetype, reason: 'too_large' },
+      };
+    }
+
     const buffer = Buffer.from(await response.arrayBuffer());
+
+    if (buffer.length > sizeLimit) {
+      if (debug)
+        console.log(
+          `[file-downloader] skipping oversized file (actual): ${file.name} (${buffer.length} > ${sizeLimit})`,
+        );
+      return {
+        kind: 'skip',
+        skipped: { name: describeFile(file), mimetype: file.mimetype, reason: 'too_large' },
+      };
+    }
+
     const originalName = file.name ?? `${file.id ?? 'unnamed'}.${file.filetype ?? 'bin'}`;
     const ext = extname(originalName) || `.${file.filetype ?? 'bin'}`;
     const safeName = sanitizeFilename(originalName.replace(ext, ''));

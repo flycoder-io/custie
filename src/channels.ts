@@ -35,6 +35,12 @@ export interface ChannelEntry {
   name?: string;
   cwd: string;
   access?: ChannelAccess;
+  /**
+   * Per-channel Claude model (`--model` value, e.g. `opus` / `haiku` / `sonnet`).
+   * Lets complex coding channels use a stronger model while leaving casual
+   * channels on a cheaper one. Absent = fall back to the global CUSTIE_MODEL.
+   */
+  model?: string;
   automations?: ChannelAutomations;
 }
 
@@ -144,4 +150,23 @@ export function resolveCwd(
 ): string {
   if (explicitCwd) return explicitCwd;
   return resolveChannelCwd(channelId) ?? fallback;
+}
+
+/** The per-channel model override, or undefined when the channel has none. */
+export function resolveChannelModel(channelId: string | undefined): string | undefined {
+  if (!channelId) return undefined;
+  return registry[channelId]?.model?.trim() || undefined;
+}
+
+/**
+ * Resolve the effective model for a Claude spawn, mirroring resolveCwd:
+ *   explicit (per-automation) model > channels[channelId].model > fallback (CUSTIE_MODEL).
+ */
+export function resolveModel(
+  explicitModel: string | undefined,
+  channelId: string | undefined,
+  fallback: string,
+): string {
+  if (explicitModel?.trim()) return explicitModel.trim();
+  return resolveChannelModel(channelId) ?? fallback;
 }

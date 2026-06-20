@@ -176,7 +176,7 @@ export async function fireMentionTrigger(
     channel: trigger.target_channel,
     cwd: resolveCwd(undefined, trigger.target_channel, config.claudeCwd),
     botName: config.botName,
-    model: config.model,
+    model: trigger.model?.trim() || config.model,
     maxBudgetUsd: config.maxBudgetUsd,
     claudeConfigDir: config.claudeConfigDir,
     slackClient: client,
