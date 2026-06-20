@@ -340,7 +340,13 @@ export async function askClaude(
   resumeSessionId?: string,
 ): Promise<ClaudeResponse> {
   try {
-    return await runCli(prompt, cwd, botName, options, claudeConfigDir, resumeSessionId);
+    const response = await runCli(prompt, cwd, botName, options, claudeConfigDir, resumeSessionId);
+    // Signal the caller to drop the session and retry with thread context.
+    if (resumeSessionId && response.isError && isContextTooLongError(response.text)) {
+      if (debug) console.log('[agent] context too long on resume — signalling caller');
+      return { ...response, isContextTooLong: true };
+    }
+    return response;
   } catch (err) {
     if (resumeSessionId) {
       if (debug) console.log(`[agent] session resume failed, starting fresh session`);
