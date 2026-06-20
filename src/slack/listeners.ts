@@ -9,7 +9,7 @@ import {
 } from '../automations/mention-trigger-engine';
 import { askClaude, type ClaudeResponse } from '../claude/agent';
 import { runAutomation } from '../automations/runner';
-import { resolveCwd, isChannelAccessAllowed } from '../channels';
+import { resolveCwd, resolveModel, isChannelAccessAllowed } from '../channels';
 import { MessageQueue } from '../queue/message-queue';
 import { toSlackMarkdown, splitMessage } from './formatters';
 import { markdownToBlocks, blockToFallbackText } from './blocks';
@@ -374,11 +374,17 @@ export function registerListeners(
     };
 
     // Posted when a request fails even after the automatic retry. Offers a
-    // button that re-runs the same request on demand.
-    const offerRetry = async (): Promise<void> => {
+    // button that re-runs the same request on demand. `detail` carries the
+    // actual underlying error (api_error_status, the CLI's error text, or a
+    // thrown message) so it shows up directly in Slack — no log-digging needed.
+    const offerRetry = async (detail?: string): Promise<void> => {
       await clearReaction();
       const retryId = registerRetry({ channelId, sessionKey, prompt, senderId, threadTs, reactTs });
-      const text = '抱歉，連續試了兩次都出錯 😣 點下面的按鈕讓我再試一次。';
+      const base = '抱歉，連續試了兩次都出錯 😣 點下面的按鈕讓我再試一次。';
+      const trimmedDetail = detail?.trim();
+      const text = trimmedDetail
+        ? `${base}\n\n錯誤：\n\`\`\`\n${trimmedDetail.slice(0, 1500)}\n\`\`\``
+        : base;
       await say({
         text,
         blocks: [
@@ -405,42 +411,114 @@ export function registerListeners(
       // channels[channelId].cwd ?? CLAUDE_CWD.
       const cwd = resolveCwd(undefined, channelId, claudeCwd);
 
+      // Per-channel model: complex coding channels can opt into a stronger
+      // model (channels.yml `model:`); otherwise the global CUSTIE_MODEL.
+      const effectiveModel = resolveModel(undefined, channelId, model);
+
       // Run the attempt, retrying once on a transient failure (a thrown error,
       // or a transient API error like a 5xx / network blip). If both attempts
       // fail, surface a retry button instead of a raw error.
       let response: ClaudeResponse | null = null;
+      // Track why each attempt failed so the give-up path can report it even
+      // with DEBUG off — otherwise the retry button appears with no log trail.
+      let attempt1Error: unknown = null;
       try {
-        response = await askClaude(enrichedPrompt, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir, sessionId);
+        response = await askClaude(enrichedPrompt, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir, sessionId);
       } catch (err) {
+        attempt1Error = err;
         if (debug) console.log('[handle] attempt 1 failed:', err);
       }
 
-      // Session history too long — drop it, rebuild thread context, retry fresh.
+      // Context too long — progressively shed context and retry fresh.
       if (response?.isContextTooLong) {
         store.deleteSession(channelId, sessionKey);
-        let freshPrompt = enrichedPrompt;
+
+        const tryAskFresh = async (p: string): Promise<ClaudeResponse | null> => {
+          try {
+            return await askClaude(p, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir);
+          } catch {
+            return null;
+          }
+        };
+
+        // Step 1: if we had a session (prompt has no thread context), add it for continuity.
+        if (sessionId && threadTs) {
+          const uid = await ensureBotUserId(client);
+          const ctx = await fetchThreadContext(client, channelId, threadTs, uid);
+          if (ctx) response = await tryAskFresh(ctx + enrichedPrompt);
+        }
+
+        // Step 2: strip thread context from prompt and retry bare.
+        if (!response || response.isContextTooLong) {
+          const bare = enrichedPrompt.replace(
+            /\[thread context[^\]]*\][\s\S]*?\[end thread context\]\n*/g,
+            '',
+          );
+          response = await tryAskFresh(bare);
+        }
+
+        // All retries exhausted — conversation is too long to continue.
+        if (!response || response.isContextTooLong) {
+          await clearReaction();
+          await say({
+            text: '這個對話太長了，沒辦法繼續處理 :pensive: 請另開一個新的 thread，我可以繼續幫你。',
+            ...(threadTs ? { thread_ts: threadTs } : {}),
+          });
+          return;
+        }
+      }
+
+      // Non-transient error baked into an existing session (e.g. a 400 from
+      // poisoned content like an unprocessable image, which replays on every
+      // --resume). Self-heal in the SAME turn instead of dropping the session and
+      // forcing the user to re-send: drop the poisoned session, rebuild context
+      // from the Slack thread, and retry fresh. The user gets a real answer and
+      // the thread stays continuous. The Slack thread is our durable record; the
+      // CLI session is just a cache, so losing it should never lose the
+      // conversation. Only a session we actually resumed can be poisoned, so gate
+      // on sessionId — a fresh request that 4xx's won't be fixed by re-sending.
+      const isPoisonedSessionError = (r: ClaudeResponse | null): boolean =>
+        r?.isError === true && !r.isTransientError && !r.isContextTooLong && !r.isTimeout;
+
+      if (sessionId && isPoisonedSessionError(response)) {
+        if (debug)
+          console.log('[handle] non-transient error — self-healing with a fresh session from thread');
+        store.deleteSession(channelId, sessionKey);
+
+        const tryAskFresh = async (p: string): Promise<ClaudeResponse | null> => {
+          try {
+            return await askClaude(p, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir);
+          } catch {
+            return null;
+          }
+        };
+
+        // Step 1: seed a fresh session with the Slack thread for continuity.
         if (threadTs) {
           const uid = await ensureBotUserId(client);
-          const threadCtx = await fetchThreadContext(client, channelId, threadTs, uid);
-          if (threadCtx) freshPrompt = threadCtx + enrichedPrompt;
+          const ctx = await fetchThreadContext(client, channelId, threadTs, uid);
+          if (ctx) response = await tryAskFresh(ctx + enrichedPrompt);
         }
-        response = null;
-        try {
-          response = await askClaude(freshPrompt, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir);
-        } catch (err) {
-          if (debug) console.log('[handle] context-too-long retry failed:', err);
+        // Step 2: if that still failed (or there was no thread), retry bare.
+        if (isPoisonedSessionError(response) || !response) {
+          response = (await tryAskFresh(enrichedPrompt)) ?? response;
         }
+        // If it STILL errors, fall through: the existing error/retry handling
+        // below surfaces it. The session is already dropped, so no replay loop.
       }
 
       const isTransientFailure = (r: ClaudeResponse | null): boolean =>
         !r || (r.isError === true && r.isTransientError === true);
 
+      let retryError: unknown = null;
+      const failedResponseBeforeRetry = response;
       if (isTransientFailure(response)) {
         if (debug) console.log('[handle] transient failure — retrying once');
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
         try {
-          response = await askClaude(enrichedPrompt, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir, sessionId);
+          response = await askClaude(enrichedPrompt, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir, sessionId);
         } catch (err) {
+          retryError = err;
           if (debug) console.log('[handle] retry attempt failed:', err);
           response = null;
         }
@@ -450,16 +528,43 @@ export function registerListeners(
         // Still failing after the retry. Transient errors don't poison the
         // session file, so keep it intact (the retry button will --resume) and
         // let the user retry on demand.
-        await offerRetry();
+        //
+        // Log the failure reason unconditionally (not gated on DEBUG): this is
+        // the only record of why the retry button was shown, so it must survive
+        // in production logs for diagnosis.
+        const describe = (err: unknown, r: ClaudeResponse | null): string => {
+          if (err) return err instanceof Error ? `thrown: ${err.message}` : `thrown: ${String(err)}`;
+          if (!r) return 'no response';
+          return `error="${r.text?.slice(0, 300) ?? ''}" transient=${r.isTransientError ?? false}`;
+        };
+        const attempt1Detail = describe(attempt1Error, failedResponseBeforeRetry);
+        const retryDetail = describe(retryError, response);
+        console.error(
+          `[handle] giving up after retry — offering retry button. ` +
+            `channel=${channelId} thread=${threadTs ?? '(none)'} sender=${senderId ?? '(unknown)'} ` +
+            `attempt1=[${attempt1Detail}] retry=[${retryDetail}]`,
+        );
+        await offerRetry(`attempt 1: ${attempt1Detail}\nretry:     ${retryDetail}`);
         return;
       }
 
       const resolved: ClaudeResponse = response!;
-      if (resolved.isError) {
-        // Non-transient (timeout, or a 4xx baked into the session file): the CLI
-        // persisted the failed turn, so any future --resume would replay the bad
-        // turn and fail again. Drop the session so the next message starts fresh.
+      if (resolved.isError && !resolved.isTimeout) {
+        // Backstop: a non-transient error that self-heal above could not recover
+        // (or that had no session to rebuild from). Drop the session so a future
+        // --resume can't replay the bad turn. Idempotent if self-heal already
+        // deleted it.
         store.deleteSession(channelId, sessionKey);
+      } else if (resolved.isTimeout) {
+        // A wall-clock timeout (killed mid-turn) does NOT necessarily corrupt the
+        // session. KEEP it so the next message can --resume and preserve history
+        // instead of rebuilding from the Slack thread. If the resumed turn replays
+        // an error, the non-transient branch above drops it then. Only persist a
+        // real session id (a fresh-start timeout has none) so we don't clobber an
+        // existing one with an empty string.
+        if (resolved.sessionId) {
+          store.saveSession(channelId, sessionKey, resolved.sessionId);
+        }
       } else {
         store.saveSession(channelId, sessionKey, resolved.sessionId);
       }
@@ -513,8 +618,9 @@ export function registerListeners(
       }
     } catch (err) {
       console.error('[listener] Error handling message:', err);
+      const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       try {
-        await offerRetry();
+        await offerRetry(detail);
       } catch (postErr) {
         console.error('[listener] Failed to post retry message:', postErr);
       }
@@ -1065,6 +1171,113 @@ export function registerListeners(
         intro.ts,
         intro.ts,
       );
+    });
+  });
+
+  // "Fork thread" message shortcut. Summarises the current session (or Slack
+  // thread messages as fallback) and opens a new root-level thread in the same
+  // channel with the summary as context.
+  app.shortcut('custie_fork', async ({ shortcut, ack, client }) => {
+    await ack();
+
+    if (shortcut.type !== 'message_action') return;
+
+    const userId = shortcut.user.id;
+    const channelId = shortcut.channel.id;
+    if (!isAccessAllowed(userId, channelId)) return;
+
+    // Resolve thread root: if the shortcut was invoked on a reply, thread_ts
+    // is the root; if invoked on the root itself, fall back to message ts.
+    const messageTs = shortcut.message.ts;
+    const threadTs = (shortcut.message as { thread_ts?: string }).thread_ts ?? messageTs;
+
+    const session = store.getSession(channelId, threadTs);
+    const cwd = resolveCwd(undefined, channelId, claudeCwd);
+
+    const FORK_PROMPT =
+      'Please summarise this conversation concisely for a forked thread. Include:\n' +
+      '- Key topics and context\n' +
+      '- Decisions or conclusions reached\n' +
+      '- Open questions / next steps\n\n' +
+      'Keep it brief — this will be the opening message of the new thread.';
+
+    // Primary path: resume existing Claude session to generate the summary.
+    let summaryResponse: ClaudeResponse | null = null;
+    if (session?.sessionId) {
+      try {
+        summaryResponse = await askClaude(
+          FORK_PROMPT,
+          cwd,
+          botName,
+          { model, maxBudgetUsd },
+          claudeConfigDir,
+          session.sessionId,
+        );
+        if (summaryResponse.isError) summaryResponse = null;
+      } catch {
+        summaryResponse = null;
+      }
+    }
+
+    // Fallback: compile Slack thread messages and summarise from scratch.
+    if (!summaryResponse) {
+      const botId = await ensureBotUserId(client);
+      const threadContext = await fetchThreadContext(client, channelId, threadTs, botId);
+      if (!threadContext) {
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: userId,
+          text: '找不到這個 thread 的對話內容，無法 fork。',
+        });
+        return;
+      }
+      try {
+        summaryResponse = await askClaude(
+          threadContext + '\n\n' + FORK_PROMPT,
+          cwd,
+          botName,
+          { model, maxBudgetUsd },
+          claudeConfigDir,
+        );
+        if (summaryResponse.isError) summaryResponse = null;
+      } catch {
+        summaryResponse = null;
+      }
+    }
+
+    if (!summaryResponse) {
+      await client.chat.postEphemeral({
+        channel: channelId,
+        user: userId,
+        text: '摘要產生失敗，請稍後再試。',
+      });
+      return;
+    }
+
+    // Post summary as a new root-level message (no thread_ts = new thread root).
+    const rtBlocks = markdownToBlocks(summaryResponse.text);
+    const newMsg = rtBlocks.length > 0
+      ? await client.chat.postMessage({
+          channel: channelId,
+          text: blockToFallbackText(rtBlocks[0]!),
+          blocks: rtBlocks as never,
+        })
+      : await client.chat.postMessage({
+          channel: channelId,
+          text: toSlackMarkdown(summaryResponse.text),
+        });
+
+    const newTs = (newMsg as { ts: string }).ts;
+    const newTsForLink = newTs.replace('.', '');
+    const authInfo = await client.auth.test();
+    const workspaceUrl = (authInfo.url as string).replace(/\/$/, '');
+    const permalink = `${workspaceUrl}/archives/${channelId}/p${newTsForLink}`;
+
+    // Notify the original thread.
+    await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: `🍴 Forked → <${permalink}>`,
     });
   });
 

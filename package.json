@@ -10,6 +10,7 @@
   },
   "files": [
     "dist",
+    "hooks",
     "system.default.md",
     "system.capabilities.md",
     "slack-app-manifest.yml"
@@ -20,6 +21,7 @@
     "build": "tsup",
     "start": "node dist/cli.js start",
     "reload": "pnpm run build && launchctl kickstart -k \"gui/$(id -u)/io.flycoder.custie\"",
+    "reload:all": "pnpm run build && launchctl kickstart -k \"gui/$(id -u)/io.flycoder.custie\" && launchctl kickstart -k \"gui/$(id -u)/io.flycoder.custie.flycoder\"",
     "lint": "oxlint src/",
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",

@@ -29,12 +29,12 @@ export interface Config {
  *   3. env vars already set in the process
  */
 export function loadEnvFiles(): void {
-  // Load XDG config.env first (override: false means it won't overwrite existing vars)
+  // Load XDG config.env first — override: true so config.env wins over plist env vars
   if (existsSync(paths.CONFIG_FILE)) {
-    dotenv.config({ path: paths.CONFIG_FILE, override: false });
+    dotenv.config({ path: paths.CONFIG_FILE, override: true });
   }
 
-  // Load repo .env second
+  // Load repo .env second (lower priority than config.env)
   const repoEnv = resolve(process.cwd(), '.env');
   if (existsSync(repoEnv)) {
     dotenv.config({ path: repoEnv, override: false });
