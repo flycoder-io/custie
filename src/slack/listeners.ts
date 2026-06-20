@@ -67,6 +67,11 @@ interface RetryContext {
 // silently, so no reaction is shown but the response still posts.
 const THINKING_REACTION = 'claude-spark';
 
+// Exact-match words (after trim + lowercase) that abort the in-progress run for
+// a thread. Matched on the whole message only, so "stop the server" is a normal
+// message, not a cancel.
+const CANCEL_WORDS = new Set(['stop', '停', 'cancel', '取消']);
+
 const nameCache = new Map<string, string>();
 
 async function resolveUser(client: App['client'], userId: string): Promise<string> {
@@ -330,6 +335,27 @@ export function registerListeners(
     if (!ac) return false;
     ac.abort();
     activeRuns.delete(threadKey);
+    return true;
+  };
+
+  // If `text` is exactly a cancel word AND a run is in progress for this thread,
+  // abort it, acknowledge with a 🛑 reaction, and report handled. Returns false
+  // (caller proceeds normally) when the text is not a cancel word, or when no run
+  // is active — in which case the word is treated as an ordinary message.
+  const tryCancel = async (
+    client: App['client'],
+    channelId: string,
+    threadKey: string,
+    text: string,
+    reactTs: string,
+  ): Promise<boolean> => {
+    if (!CANCEL_WORDS.has(text.trim().toLowerCase())) return false;
+    if (!abortRun(threadKey)) return false;
+    try {
+      await client.reactions.add({ channel: channelId, timestamp: reactTs, name: 'octagonal_sign' });
+    } catch (err) {
+      if (debug) console.log('[cancel] Failed to add stop reaction:', err);
+    }
     return true;
   };
 
@@ -722,6 +748,7 @@ export function registerListeners(
 
     const userId = await ensureBotUserId(client);
     const basePrompt = event.text.replace(new RegExp(`<@${userId}>`, 'g'), '').trim();
+    if (await tryCancel(client, channelId, threadKey, basePrompt, event.ts)) return;
     const downloaded = await downloadSlackFiles(
       'files' in event ? (event.files as SlackFile[] | undefined) : undefined,
       slackBotToken,
@@ -901,6 +928,7 @@ export function registerListeners(
       const threadTs = isAutoRespondChannel ? (eventThreadTs ?? event.ts) : eventThreadTs;
       const sessionKey = threadTs ?? channelId;
       const threadKey = `${channelId}:${sessionKey}`;
+      if (await tryCancel(client, channelId, threadKey, text, event.ts)) return;
 
       const downloaded = await downloadSlackFiles(
         'files' in event ? (event.files as SlackFile[] | undefined) : undefined,
@@ -945,6 +973,7 @@ export function registerListeners(
     if (!prompt) return;
 
     const threadKey = `${channelId}:${threadTs}`;
+    if (await tryCancel(client, channelId, threadKey, text, event.ts)) return;
     queue.enqueue(threadKey, async () => {
       // Check session inside the queue so a follow-up sent while the prior
       // mention is still processing waits for that mention's session save
