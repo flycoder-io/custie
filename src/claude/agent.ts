@@ -14,6 +14,20 @@ export interface ClaudeResponse {
    * (e.g. a 4xx replaying on every resume) and the caller should drop it.
    */
   isTransientError?: boolean;
+  /**
+   * True when the prompt exceeded the model's context window. The caller should
+   * drop the session and retry with progressively less context (thread history,
+   * then bare prompt), and show a friendly message if nothing works.
+   */
+  isContextTooLong?: boolean;
+  /**
+   * True when the subprocess hit the wall-clock timeout and was killed. Unlike a
+   * 4xx baked into the session file, a timeout does NOT necessarily corrupt the
+   * session — so the caller should KEEP it and try `--resume` next time rather
+   * than dropping the whole conversation. If the resumed turn replays an error,
+   * the normal non-transient path drops it then.
+   */
+  isTimeout?: boolean;
 }
 
 const debug = process.env['DEBUG'] === 'true';
@@ -29,6 +43,18 @@ const TRANSIENT_ERROR_PATTERNS = [
   /socket hang up/i,
   /network/i,
 ];
+
+const CONTEXT_TOO_LONG_PATTERNS = [
+  /prompt is too long/i,
+  /context.{0,20}too long/i,
+  /too many tokens/i,
+  /context length exceeded/i,
+  /maximum context length/i,
+];
+
+function isContextTooLongError(text: string): boolean {
+  return CONTEXT_TOO_LONG_PATTERNS.some((p) => p.test(text));
+}
 
 function isTransientError(text: string, apiErrorStatus: number | null | undefined): boolean {
   // No HTTP status usually means the request never reached the API (DNS,
@@ -47,9 +73,11 @@ function isTransientError(text: string, apiErrorStatus: number | null | undefine
 // Hard timeout for the Claude CLI subprocess. The CLI runs with --output-format json,
 // which only prints on completion, so we can't detect idle — only total wall-clock.
 // A subprocess hanging this long is almost always stuck on a long-running command
-// (dev server, watcher) inside a Bash tool call. 15 min covers genuinely long thinking
-// + tool loops; anything beyond that is treated as a hang.
-const DEFAULT_MAX_DURATION_SECONDS = 900;
+// (dev server, watcher) inside a Bash tool call. The PreToolUse Bash guard now
+// blocks the common foreground-forever offenders, so this is the backstop for the
+// rest: 10 min covers genuinely long thinking + tool loops while cutting the dead
+// wait (and the friendly timeout message) well before the old 15 min.
+const DEFAULT_MAX_DURATION_SECONDS = 600;
 // Grace period between SIGTERM and SIGKILL when the timeout fires.
 const KILL_GRACE_MS = 10_000;
 
@@ -86,6 +114,25 @@ interface CliOptions {
   maxBudgetUsd?: number;
 }
 
+// PreToolUse(Bash) guard injected ONLY into Custie's CLI invocations (not the
+// user's own Claude Code). It blocks foreground-forever commands before they run
+// so a stuck `pnpm dev` / `tail -f` can't hang the turn until the wall-clock
+// timeout kills it (which would also drop the session). Passed via `--settings`
+// as an inline JSON string so it stays in-repo and touches no config dir.
+function buildHookSettings(): string {
+  const guardScript = resolve(paths.PACKAGE_ROOT, 'hooks/bash-guard.mjs');
+  return JSON.stringify({
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: 'Bash',
+          hooks: [{ type: 'command', command: `node '${guardScript}'` }],
+        },
+      ],
+    },
+  });
+}
+
 function buildArgs(
   prompt: string,
   botName: string,
@@ -102,6 +149,8 @@ function buildArgs(
     buildSystemPrompt(botName),
     '--setting-sources',
     'user,project,local',
+    '--settings',
+    buildHookSettings(),
   ];
 
   // Model selection (cost lever): defaults to a cheaper model upstream; only
@@ -204,6 +253,7 @@ function runCli(
             `\`tail -f\`, etc.) that never exits. If you wanted to start a server, ask me to run it ` +
             `in the background (\`nohup ... > /tmp/log 2>&1 & disown\`) and I'll come back with the PID.`,
           isError: true,
+          isTimeout: true,
         });
         return;
       }
@@ -233,13 +283,22 @@ function runCli(
         // returns the same error in 0ms. Flag it so the caller can drop the
         // session rather than save it.
         if (result.is_error) {
-          if (debug) console.log(`[agent] is_error result:`, JSON.stringify(result));
+          // Always log (not gated on DEBUG): an is_error result is the upstream
+          // source of the "failed twice" retry button, so it must be visible in
+          // production logs. api_error_status pinpoints rate limit / usage-pool
+          // (429), server (5xx), and auth/input (4xx) failures.
+          console.error(
+            `[agent] is_error result: api_error_status=${result.api_error_status ?? 'null'} ` +
+              `subtype=${result.subtype} result="${(result.result ?? '').slice(0, 300)}"`,
+          );
           const text = result.result || `API Error: ${result.api_error_status ?? 'unknown'}`;
+          const contextTooLong = isContextTooLongError(text);
           resolve({
             sessionId,
             text,
             isError: true,
-            isTransientError: isTransientError(text, result.api_error_status),
+            isTransientError: !contextTooLong && isTransientError(text, result.api_error_status),
+            isContextTooLong: contextTooLong || undefined,
           });
           return;
         }

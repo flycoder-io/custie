@@ -9,7 +9,7 @@ import {
 } from '../automations/mention-trigger-engine';
 import { askClaude, type ClaudeResponse } from '../claude/agent';
 import { runAutomation } from '../automations/runner';
-import { resolveCwd, isChannelAccessAllowed } from '../channels';
+import { resolveCwd, resolveModel, isChannelAccessAllowed } from '../channels';
 import { MessageQueue } from '../queue/message-queue';
 import { toSlackMarkdown, splitMessage } from './formatters';
 import { markdownToBlocks, blockToFallbackText } from './blocks';
@@ -374,11 +374,17 @@ export function registerListeners(
     };
 
     // Posted when a request fails even after the automatic retry. Offers a
-    // button that re-runs the same request on demand.
-    const offerRetry = async (): Promise<void> => {
+    // button that re-runs the same request on demand. `detail` carries the
+    // actual underlying error (api_error_status, the CLI's error text, or a
+    // thrown message) so it shows up directly in Slack — no log-digging needed.
+    const offerRetry = async (detail?: string): Promise<void> => {
       await clearReaction();
       const retryId = registerRetry({ channelId, sessionKey, prompt, senderId, threadTs, reactTs });
-      const text = '抱歉，連續試了兩次都出錯 😣 點下面的按鈕讓我再試一次。';
+      const base = '抱歉，連續試了兩次都出錯 😣 點下面的按鈕讓我再試一次。';
+      const trimmedDetail = detail?.trim();
+      const text = trimmedDetail
+        ? `${base}\n\n錯誤：\n\`\`\`\n${trimmedDetail.slice(0, 1500)}\n\`\`\``
+        : base;
       await say({
         text,
         blocks: [
@@ -405,13 +411,21 @@ export function registerListeners(
       // channels[channelId].cwd ?? CLAUDE_CWD.
       const cwd = resolveCwd(undefined, channelId, claudeCwd);
 
+      // Per-channel model: complex coding channels can opt into a stronger
+      // model (channels.yml `model:`); otherwise the global CUSTIE_MODEL.
+      const effectiveModel = resolveModel(undefined, channelId, model);
+
       // Run the attempt, retrying once on a transient failure (a thrown error,
       // or a transient API error like a 5xx / network blip). If both attempts
       // fail, surface a retry button instead of a raw error.
       let response: ClaudeResponse | null = null;
+      // Track why each attempt failed so the give-up path can report it even
+      // with DEBUG off — otherwise the retry button appears with no log trail.
+      let attempt1Error: unknown = null;
       try {
-        response = await askClaude(enrichedPrompt, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir, sessionId);
+        response = await askClaude(enrichedPrompt, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir, sessionId);
       } catch (err) {
+        attempt1Error = err;
         if (debug) console.log('[handle] attempt 1 failed:', err);
       }
 
@@ -421,7 +435,7 @@ export function registerListeners(
 
         const tryAskFresh = async (p: string): Promise<ClaudeResponse | null> => {
           try {
-            return await askClaude(p, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir);
+            return await askClaude(p, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir);
           } catch {
             return null;
           }
@@ -454,15 +468,57 @@ export function registerListeners(
         }
       }
 
+      // Non-transient error baked into an existing session (e.g. a 400 from
+      // poisoned content like an unprocessable image, which replays on every
+      // --resume). Self-heal in the SAME turn instead of dropping the session and
+      // forcing the user to re-send: drop the poisoned session, rebuild context
+      // from the Slack thread, and retry fresh. The user gets a real answer and
+      // the thread stays continuous. The Slack thread is our durable record; the
+      // CLI session is just a cache, so losing it should never lose the
+      // conversation. Only a session we actually resumed can be poisoned, so gate
+      // on sessionId — a fresh request that 4xx's won't be fixed by re-sending.
+      const isPoisonedSessionError = (r: ClaudeResponse | null): boolean =>
+        r?.isError === true && !r.isTransientError && !r.isContextTooLong && !r.isTimeout;
+
+      if (sessionId && isPoisonedSessionError(response)) {
+        if (debug)
+          console.log('[handle] non-transient error — self-healing with a fresh session from thread');
+        store.deleteSession(channelId, sessionKey);
+
+        const tryAskFresh = async (p: string): Promise<ClaudeResponse | null> => {
+          try {
+            return await askClaude(p, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir);
+          } catch {
+            return null;
+          }
+        };
+
+        // Step 1: seed a fresh session with the Slack thread for continuity.
+        if (threadTs) {
+          const uid = await ensureBotUserId(client);
+          const ctx = await fetchThreadContext(client, channelId, threadTs, uid);
+          if (ctx) response = await tryAskFresh(ctx + enrichedPrompt);
+        }
+        // Step 2: if that still failed (or there was no thread), retry bare.
+        if (isPoisonedSessionError(response) || !response) {
+          response = (await tryAskFresh(enrichedPrompt)) ?? response;
+        }
+        // If it STILL errors, fall through: the existing error/retry handling
+        // below surfaces it. The session is already dropped, so no replay loop.
+      }
+
       const isTransientFailure = (r: ClaudeResponse | null): boolean =>
         !r || (r.isError === true && r.isTransientError === true);
 
+      let retryError: unknown = null;
+      const failedResponseBeforeRetry = response;
       if (isTransientFailure(response)) {
         if (debug) console.log('[handle] transient failure — retrying once');
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
         try {
-          response = await askClaude(enrichedPrompt, cwd, botName, { model, maxBudgetUsd }, claudeConfigDir, sessionId);
+          response = await askClaude(enrichedPrompt, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir, sessionId);
         } catch (err) {
+          retryError = err;
           if (debug) console.log('[handle] retry attempt failed:', err);
           response = null;
         }
@@ -472,16 +528,43 @@ export function registerListeners(
         // Still failing after the retry. Transient errors don't poison the
         // session file, so keep it intact (the retry button will --resume) and
         // let the user retry on demand.
-        await offerRetry();
+        //
+        // Log the failure reason unconditionally (not gated on DEBUG): this is
+        // the only record of why the retry button was shown, so it must survive
+        // in production logs for diagnosis.
+        const describe = (err: unknown, r: ClaudeResponse | null): string => {
+          if (err) return err instanceof Error ? `thrown: ${err.message}` : `thrown: ${String(err)}`;
+          if (!r) return 'no response';
+          return `error="${r.text?.slice(0, 300) ?? ''}" transient=${r.isTransientError ?? false}`;
+        };
+        const attempt1Detail = describe(attempt1Error, failedResponseBeforeRetry);
+        const retryDetail = describe(retryError, response);
+        console.error(
+          `[handle] giving up after retry — offering retry button. ` +
+            `channel=${channelId} thread=${threadTs ?? '(none)'} sender=${senderId ?? '(unknown)'} ` +
+            `attempt1=[${attempt1Detail}] retry=[${retryDetail}]`,
+        );
+        await offerRetry(`attempt 1: ${attempt1Detail}\nretry:     ${retryDetail}`);
         return;
       }
 
       const resolved: ClaudeResponse = response!;
-      if (resolved.isError) {
-        // Non-transient (timeout, or a 4xx baked into the session file): the CLI
-        // persisted the failed turn, so any future --resume would replay the bad
-        // turn and fail again. Drop the session so the next message starts fresh.
+      if (resolved.isError && !resolved.isTimeout) {
+        // Backstop: a non-transient error that self-heal above could not recover
+        // (or that had no session to rebuild from). Drop the session so a future
+        // --resume can't replay the bad turn. Idempotent if self-heal already
+        // deleted it.
         store.deleteSession(channelId, sessionKey);
+      } else if (resolved.isTimeout) {
+        // A wall-clock timeout (killed mid-turn) does NOT necessarily corrupt the
+        // session. KEEP it so the next message can --resume and preserve history
+        // instead of rebuilding from the Slack thread. If the resumed turn replays
+        // an error, the non-transient branch above drops it then. Only persist a
+        // real session id (a fresh-start timeout has none) so we don't clobber an
+        // existing one with an empty string.
+        if (resolved.sessionId) {
+          store.saveSession(channelId, sessionKey, resolved.sessionId);
+        }
       } else {
         store.saveSession(channelId, sessionKey, resolved.sessionId);
       }
@@ -535,8 +618,9 @@ export function registerListeners(
       }
     } catch (err) {
       console.error('[listener] Error handling message:', err);
+      const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       try {
-        await offerRetry();
+        await offerRetry(detail);
       } catch (postErr) {
         console.error('[listener] Failed to post retry message:', postErr);
       }
