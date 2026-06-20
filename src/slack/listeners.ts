@@ -319,6 +319,20 @@ export function registerListeners(
     return id;
   };
 
+  // In-progress Claude runs, keyed by threadKey (`${channelId}:${sessionKey}`).
+  // Lets the cancel-keyword handler abort the run currently executing for a
+  // thread. In-memory only: a restart drops it, which is correct because the
+  // subprocess dies with the server. At most one entry per thread (the queue
+  // serialises per thread, so only one run is ever in progress).
+  const activeRuns = new Map<string, AbortController>();
+  const abortRun = (threadKey: string): boolean => {
+    const ac = activeRuns.get(threadKey);
+    if (!ac) return false;
+    ac.abort();
+    activeRuns.delete(threadKey);
+    return true;
+  };
+
   async function ensureBotUserId(client: App['client']): Promise<string> {
     if (botUserId) return botUserId;
     const auth = await client.auth.test();
@@ -337,6 +351,10 @@ export function registerListeners(
     threadTs?: string,
     reactTs?: string,
   ): Promise<void> {
+    const threadKey = `${channelId}:${sessionKey}`;
+    const abortController = new AbortController();
+    activeRuns.set(threadKey, abortController);
+
     // Signal work-in-progress with a reaction on the triggering message
     // instead of posting a "_Thinking ..._" message.
     let reacted = false;
@@ -446,6 +464,11 @@ export function registerListeners(
       // model (channels.yml `model:`); otherwise the global CUSTIE_MODEL.
       const effectiveModel = resolveModel(undefined, channelId, model);
 
+      // Shared agent options. signal carries cancellation into the subprocess so
+      // ALL attempts (first try, transient retry, context-shed retries, poisoned
+      // session self-heal) abort together when the user cancels.
+      const askOptions = { model: effectiveModel, maxBudgetUsd, signal: abortController.signal };
+
       // Run the attempt, retrying once on a transient failure (a thrown error,
       // or a transient API error like a 5xx / network blip). If both attempts
       // fail, surface a retry button instead of a raw error.
@@ -454,7 +477,7 @@ export function registerListeners(
       // with DEBUG off — otherwise the retry button appears with no log trail.
       let attempt1Error: unknown = null;
       try {
-        response = await askClaude(enrichedPrompt, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir, sessionId);
+        response = await askClaude(enrichedPrompt, cwd, botName, askOptions, claudeConfigDir, sessionId);
       } catch (err) {
         attempt1Error = err;
         if (debug) console.log('[handle] attempt 1 failed:', err);
@@ -466,7 +489,7 @@ export function registerListeners(
 
         const tryAskFresh = async (p: string): Promise<ClaudeResponse | null> => {
           try {
-            return await askClaude(p, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir);
+            return await askClaude(p, cwd, botName, askOptions, claudeConfigDir);
           } catch {
             return null;
           }
@@ -518,7 +541,7 @@ export function registerListeners(
 
         const tryAskFresh = async (p: string): Promise<ClaudeResponse | null> => {
           try {
-            return await askClaude(p, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir);
+            return await askClaude(p, cwd, botName, askOptions, claudeConfigDir);
           } catch {
             return null;
           }
@@ -547,7 +570,7 @@ export function registerListeners(
         if (debug) console.log('[handle] transient failure — retrying once');
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
         try {
-          response = await askClaude(enrichedPrompt, cwd, botName, { model: effectiveModel, maxBudgetUsd }, claudeConfigDir, sessionId);
+          response = await askClaude(enrichedPrompt, cwd, botName, askOptions, claudeConfigDir, sessionId);
         } catch (err) {
           retryError = err;
           if (debug) console.log('[handle] retry attempt failed:', err);
@@ -576,6 +599,15 @@ export function registerListeners(
             `attempt1=[${attempt1Detail}] retry=[${retryDetail}]`,
         );
         await offerRetry(`attempt 1: ${attempt1Detail}\nretry:     ${retryDetail}`);
+        return;
+      }
+
+      // User aborted via a cancel keyword. Leave the session untouched (the
+      // killed subprocess returns no valid session id, so keep the prior one),
+      // post nothing, and skip the retry button. The 🛑 reaction added by the
+      // cancel handler is the only acknowledgement.
+      if (response?.isCancelled) {
+        await clearReaction();
         return;
       }
 
@@ -666,6 +698,13 @@ export function registerListeners(
         await offerRetry(detail);
       } catch (postErr) {
         console.error('[listener] Failed to post retry message:', postErr);
+      }
+    } finally {
+      // Drop our registry entry only if it is still ours. abortRun() may have
+      // already deleted it (and a later run for the same thread could have
+      // registered a new controller), so never clobber someone else's entry.
+      if (activeRuns.get(threadKey) === abortController) {
+        activeRuns.delete(threadKey);
       }
     }
   }
