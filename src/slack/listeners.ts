@@ -395,6 +395,37 @@ export function registerListeners(
       } as never);
     };
 
+    // Posted when a turn hit the wall-clock timeout. The turn isn't dead — the
+    // CLI session is kept, so --resume restores the FULL context (no thread
+    // re-read needed). Offer a friendly "continue" button that resumes and picks
+    // up where it left off, instead of surfacing the raw timeout error.
+    const offerContinue = async (): Promise<void> => {
+      await clearReaction();
+      const retryId = registerRetry({
+        channelId,
+        sessionKey,
+        // Resume instruction, NOT the original prompt — the session already holds
+        // the original request + partial work, so re-sending it would double up.
+        prompt:
+          '（系統訊息）你剛才的回應因為執行時間過長被自動中斷了。請從上次中斷的地方接著完成，' +
+          '不要從頭重做。如果剛才卡在某個指令上，改用較短的範圍或背景執行的方式再試一次。',
+        senderId,
+        threadTs,
+        reactTs,
+      });
+      const text =
+        '這個任務跑得有點久，我先把它暫停了 ⏸️\n' +
+        '這不是失敗 — 進度和上下文都還留著。要我接著做完嗎？';
+      await say({
+        text,
+        blocks: [
+          { type: 'section', text: { type: 'mrkdwn', text } },
+          buildRetryBlock(retryId, '▶️ 繼續'),
+        ],
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      } as never);
+    };
+
     try {
       // Build context-enriched prompt so Claude knows where and who
       const [channelName, senderName] = await Promise.all([
@@ -557,14 +588,26 @@ export function registerListeners(
         store.deleteSession(channelId, sessionKey);
       } else if (resolved.isTimeout) {
         // A wall-clock timeout (killed mid-turn) does NOT necessarily corrupt the
-        // session. KEEP it so the next message can --resume and preserve history
-        // instead of rebuilding from the Slack thread. If the resumed turn replays
-        // an error, the non-transient branch above drops it then. Only persist a
-        // real session id (a fresh-start timeout has none) so we don't clobber an
-        // existing one with an empty string.
+        // session. KEEP it so --resume can pick up with full context (no thread
+        // re-read needed). If the resumed turn later replays an error, the
+        // non-transient branch above drops it then.
         if (resolved.sessionId) {
+          // We have something to resume: replace the raw timeout error with a
+          // friendly "continue" button instead of the scary terminated message.
           store.saveSession(channelId, sessionKey, resolved.sessionId);
+          await offerContinue();
+          return;
         }
+        // No session to resume (timed out before one was established). Show a
+        // friendly note rather than the raw error.
+        await clearReaction();
+        await say({
+          text:
+            '這個任務跑得有點久，被我暫停了 ⏸️ 這次沒有可以接續的進度，' +
+            '麻煩你再傳一次，或把要做的事拆小一點。',
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        });
+        return;
       } else {
         store.saveSession(channelId, sessionKey, resolved.sessionId);
       }
