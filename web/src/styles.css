@@ -134,6 +134,15 @@ tr.dim td {
   max-width: 70ch;
 }
 
+.group-row td {
+  background: #12151b;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 12px;
+}
+
 .error {
   color: #f85149;
 }

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import cronstrue from 'cronstrue';
 import { api } from './api';
 
@@ -51,32 +51,42 @@ export function ChannelsView() {
               <thead>
                 <tr>
                   <th>Channel</th>
-                  <th>Config</th>
                   <th>cwd</th>
                   <th>Model</th>
                   <th>Access</th>
                 </tr>
               </thead>
               <tbody>
-                {d.channels.map((c) => (
-                  <tr key={c.id} className={c.configured ? '' : 'dim'}>
-                    <td>#{c.name}</td>
-                    <td>
-                      <span className={`badge ${c.configured ? 'on' : 'off'}`}>
-                        {c.configured ? 'configured' : 'default'}
-                      </span>
-                    </td>
-                    <td className="mono small">{c.cwd ?? '—'}</td>
-                    <td>
-                      {c.model ? (
-                        cap(c.model)
-                      ) : (
-                        <span className="small">{cap(d.defaultModel)}</span>
-                      )}
-                    </td>
-                    <td>{c.access ? JSON.stringify(c.access) : '—'}</td>
-                  </tr>
-                ))}
+                {[...d.channels]
+                  .sort(
+                    (a, b) =>
+                      Number(b.configured) - Number(a.configured) ||
+                      a.name.localeCompare(b.name),
+                  )
+                  .map((c, i, arr) => {
+                    const firstDefault = !c.configured && (i === 0 || arr[i - 1].configured);
+                    return (
+                      <Fragment key={c.id}>
+                        {firstDefault && (
+                          <tr className="group-row">
+                            <td colSpan={4}>On defaults</td>
+                          </tr>
+                        )}
+                        <tr className={c.configured ? '' : 'dim'}>
+                          <td>#{c.name}</td>
+                          <td className="mono small">{c.cwd ?? '—'}</td>
+                          <td>
+                            {c.model ? (
+                              cap(c.model)
+                            ) : (
+                              <span className="small">{cap(d.defaultModel)}</span>
+                            )}
+                          </td>
+                          <td>{c.access ? JSON.stringify(c.access) : '—'}</td>
+                        </tr>
+                      </Fragment>
+                    );
+                  })}
               </tbody>
             </table>
           </>
