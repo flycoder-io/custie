@@ -9,6 +9,14 @@ import { listProfiles, isServiceRunning } from '../commands/profiles';
 import { listMemberChannels, lookupById } from '../store/channel-cache';
 import { SessionStore } from '../store/session-store';
 
+/**
+ * The global default model. Mirrors config.ts: `sonnet` unless CUSTIE_MODEL
+ * overrides it. Channels/schedules without their own `model:` run on this.
+ */
+function defaultModelName(): string {
+  return process.env['CUSTIE_MODEL']?.trim() || 'sonnet';
+}
+
 /** Turn a stored `channel` value (ID or `#name`) into a `#name` label. */
 function channelLabel(channel: string): string {
   if (channel.startsWith('C')) {
@@ -80,14 +88,12 @@ export function createApiRouter(): Hono {
     }
 
     list.sort((a, b) => a.name.localeCompare(b.name));
-    return c.json({ channels: list });
+    return c.json({ channels: list, defaultModel: defaultModelName() });
   });
 
   api.get('/automations', (c) => {
     const auto = loadAutomations();
-    // Mirror config.ts: the global model default is `sonnet` unless CUSTIE_MODEL
-    // overrides it. Schedules without their own `model:` run on this.
-    const defaultModel = process.env['CUSTIE_MODEL']?.trim() || 'sonnet';
+    const defaultModel = defaultModelName();
     return c.json({
       ...auto,
       defaultModel,

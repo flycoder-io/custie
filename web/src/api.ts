@@ -58,7 +58,7 @@ async function get<T>(path: string): Promise<T> {
 
 export const api = {
   profile: () => get<{ profile: string }>('/profile'),
-  channels: () => get<{ channels: ChannelRow[] }>('/channels'),
+  channels: () => get<{ channels: ChannelRow[]; defaultModel: string }>('/channels'),
   automations: () =>
     get<{
       schedules: Schedule[];

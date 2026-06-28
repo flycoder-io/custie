@@ -70,7 +70,13 @@ export function ChannelsView() {
                       </span>
                     </td>
                     <td className="mono small">{c.cwd ?? '—'}</td>
-                    <td>{c.model ?? '—'}</td>
+                    <td>
+                      {c.model ? (
+                        cap(c.model)
+                      ) : (
+                        <span className="small">{cap(d.defaultModel)}</span>
+                      )}
+                    </td>
                     <td>{c.access ? JSON.stringify(c.access) : '—'}</td>
                   </tr>
                 ))}
