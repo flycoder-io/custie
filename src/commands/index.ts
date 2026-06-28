@@ -11,3 +11,4 @@ export * from './stop';
 export * from './logs';
 export * from './slack';
 export * from './xero';
+export * from './dashboard';

@@ -29,11 +29,13 @@
     "release": "pnpm version patch && npm publish && git push --follow-tags"
   },
   "dependencies": {
+    "@hono/node-server": "^2.0.6",
     "@inquirer/prompts": "^8.3.2",
     "@slack/bolt": "^4.6.0",
     "better-sqlite3": "^12.6.2",
     "cron-parser": "^5.5.0",
     "dotenv": "^17.2.4",
+    "hono": "^4.12.27",
     "js-yaml": "^4.1.1",
     "marked": "^18.0.2",
     "node-cron": "^4.2.1"

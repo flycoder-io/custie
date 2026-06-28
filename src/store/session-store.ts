@@ -65,6 +65,27 @@ export class SessionStore {
       .run(channelId, threadTs, sessionId);
   }
 
+  /** All sessions, newest activity first. Read-only listing for the dashboard. */
+  listSessions(): Session[] {
+    const rows = this.db
+      .prepare('SELECT * FROM sessions ORDER BY updated_at DESC')
+      .all() as {
+      channel_id: string;
+      thread_ts: string;
+      session_id: string;
+      created_at: string;
+      updated_at: string;
+    }[];
+
+    return rows.map((row) => ({
+      channelId: row.channel_id,
+      threadTs: row.thread_ts,
+      sessionId: row.session_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
   deleteSession(channelId: string, threadTs: string): void {
     this.db
       .prepare('DELETE FROM sessions WHERE channel_id = ? AND thread_ts = ?')

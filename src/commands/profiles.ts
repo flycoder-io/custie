@@ -23,7 +23,7 @@ export function listProfiles(): string[] {
 }
 
 /** Whether the profile's system service is currently loaded/active. */
-function isServiceRunning(profile: string): boolean {
+export function isServiceRunning(profile: string): boolean {
   try {
     if (platform() === 'darwin') {
       const out = execSync('launchctl list', { encoding: 'utf-8', stdio: 'pipe' });
