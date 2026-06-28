@@ -60,10 +60,7 @@ export function ChannelsView() {
               <tbody>
                 {d.channels.map((c) => (
                   <tr key={c.id} className={c.configured ? '' : 'dim'}>
-                    <td>
-                      <div>#{c.name}</div>
-                      <div className="mono small">{c.id}</div>
-                    </td>
+                    <td>#{c.name}</td>
                     <td>
                       <span className={`badge ${c.configured ? 'on' : 'off'}`}>
                         {c.configured ? 'configured' : 'default'}
