@@ -44,6 +44,7 @@ export interface ProfileRow {
 
 export interface SessionRow {
   channelId: string;
+  channelLabel: string;
   threadTs: string;
   sessionId: string;
   createdAt: string;

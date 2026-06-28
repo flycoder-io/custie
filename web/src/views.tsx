@@ -253,7 +253,7 @@ export function SessionsView() {
             <tbody>
               {d.sessions.slice(0, 200).map((s) => (
                 <tr key={`${s.channelId}:${s.threadTs}`}>
-                  <td className="mono">{s.channelId}</td>
+                  <td>{s.channelLabel}</td>
                   <td className="mono small">{s.threadTs}</td>
                   <td className="mono small">{s.sessionId.slice(0, 8)}…</td>
                   <td className="small">{s.updatedAt}</td>

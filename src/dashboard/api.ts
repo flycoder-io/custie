@@ -17,12 +17,17 @@ function defaultModelName(): string {
   return process.env['CUSTIE_MODEL']?.trim() || 'sonnet';
 }
 
-/** Turn a stored `channel` value (ID or `#name`) into a `#name` label. */
+/**
+ * Turn a stored channel value into a human label: `C…` channel IDs resolve to
+ * `#name` via the cache (falling back to the raw ID), `D…` DM IDs become `DM`,
+ * and `#name` strings pass through.
+ */
 function channelLabel(channel: string): string {
   if (channel.startsWith('C')) {
     const row = lookupById(channel);
     return row ? `#${row.name}` : channel;
   }
+  if (channel.startsWith('D')) return 'DM';
   return channel.startsWith('#') ? channel : `#${channel}`;
 }
 
@@ -118,7 +123,11 @@ export function createApiRouter(): Hono {
     if (!existsSync(paths.DB_FILE)) return c.json({ sessions: [] });
     const store = new SessionStore(paths.DB_FILE);
     try {
-      return c.json({ sessions: store.listSessions() });
+      const sessions = store.listSessions().map((s) => ({
+        ...s,
+        channelLabel: channelLabel(s.channelId),
+      }));
+      return c.json({ sessions });
     } finally {
       store.close();
     }
