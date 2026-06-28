@@ -12,14 +12,20 @@ export const DEFAULT_DASHBOARD_PORT = 4747;
 /** Where the built SPA lands (`web/dist`), relative to the package root. */
 const WEB_DIST = join(paths.PACKAGE_ROOT, 'web', 'dist');
 
-/** Resolve the first free TCP port at/after `start`, bound to 127.0.0.1. */
-export async function findFreePort(start: number, attempts = 50): Promise<number> {
+export const DEFAULT_DASHBOARD_HOST = '127.0.0.1';
+
+/** Resolve the first free TCP port at/after `start`, bound to `host`. */
+export async function findFreePort(
+  start: number,
+  host = DEFAULT_DASHBOARD_HOST,
+  attempts = 50,
+): Promise<number> {
   for (let port = start; port < start + attempts; port++) {
     const free = await new Promise<boolean>((resolve) => {
       const probe = createServer();
       probe.once('error', () => resolve(false));
       probe.once('listening', () => probe.close(() => resolve(true)));
-      probe.listen(port, '127.0.0.1');
+      probe.listen(port, host);
     });
     if (free) return port;
   }
@@ -28,16 +34,21 @@ export async function findFreePort(start: number, attempts = 50): Promise<number
 
 export interface DashboardServer {
   port: number;
+  host: string;
   url: string;
   close: () => void;
 }
 
 /**
- * Build and start the dashboard HTTP server on 127.0.0.1. Mounts the read-only
- * JSON API under `/api` and serves the built SPA (with a catch-all fallback to
- * `index.html` for client-side routing) when `web/dist` exists.
+ * Build and start the dashboard HTTP server. Binds to `host` (loopback by
+ * default; pass a LAN/Tailscale IP or `0.0.0.0` to expose it). Mounts the
+ * read-only JSON API under `/api` and serves the built SPA (with a catch-all
+ * fallback to `index.html` for client-side routing) when `web/dist` exists.
  */
-export async function startDashboardServer(preferredPort = DEFAULT_DASHBOARD_PORT): Promise<DashboardServer> {
+export async function startDashboardServer(
+  preferredPort = DEFAULT_DASHBOARD_PORT,
+  host = DEFAULT_DASHBOARD_HOST,
+): Promise<DashboardServer> {
   const app = new Hono();
 
   app.route('/api', createApiRouter());
@@ -55,13 +66,17 @@ export async function startDashboardServer(preferredPort = DEFAULT_DASHBOARD_POR
     );
   }
 
-  const port = await findFreePort(preferredPort);
+  const port = await findFreePort(preferredPort, host);
 
-  const server = serve({ fetch: app.fetch, port, hostname: '127.0.0.1' });
+  const server = serve({ fetch: app.fetch, port, hostname: host });
+
+  // For a wildcard bind there's no single browsable address — show loopback.
+  const displayHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
 
   return {
     port,
-    url: `http://127.0.0.1:${port}`,
+    host,
+    url: `http://${displayHost}:${port}`,
     close: () => server.close(),
   };
 }
