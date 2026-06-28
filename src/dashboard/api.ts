@@ -6,8 +6,17 @@ import { getProfile } from '../profile';
 import { loadChannels } from '../channels';
 import { loadAutomations } from '../automations/config';
 import { listProfiles, isServiceRunning } from '../commands/profiles';
-import { listMemberChannels } from '../store/channel-cache';
+import { listMemberChannels, lookupById } from '../store/channel-cache';
 import { SessionStore } from '../store/session-store';
+
+/** Turn a stored `channel` value (ID or `#name`) into a `#name` label. */
+function channelLabel(channel: string): string {
+  if (channel.startsWith('C')) {
+    const row = lookupById(channel);
+    return row ? `#${row.name}` : channel;
+  }
+  return channel.startsWith('#') ? channel : `#${channel}`;
+}
 
 /** Read the last `limit` lines of a log file, or an empty array if absent. */
 function tailFile(file: string, limit: number): string[] {
@@ -75,7 +84,18 @@ export function createApiRouter(): Hono {
   });
 
   api.get('/automations', (c) => {
-    return c.json(loadAutomations());
+    const auto = loadAutomations();
+    // Mirror config.ts: the global model default is `sonnet` unless CUSTIE_MODEL
+    // overrides it. Schedules without their own `model:` run on this.
+    const defaultModel = process.env['CUSTIE_MODEL']?.trim() || 'sonnet';
+    return c.json({
+      ...auto,
+      defaultModel,
+      schedules: auto.schedules.map((s) => ({
+        ...s,
+        channelLabel: channelLabel(s.channel),
+      })),
+    });
   });
 
   api.get('/profiles', (c) => {

@@ -1,6 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import cronstrue from 'cronstrue';
 import { api } from './api';
+
+/** Human-readable cron, e.g. "0 6 * * 6" → "At 06:00 AM, only on Saturday". */
+function humanCron(expr: string): string {
+  try {
+    return cronstrue.toString(expr, { verbose: false });
+  } catch {
+    return expr;
+  }
+}
 
 /** Generic async-state wrapper so every view handles loading/error uniformly. */
 function Async<T>({
@@ -80,23 +90,31 @@ export function AutomationsView() {
               <tr>
                 <th>Name</th>
                 <th>Enabled</th>
-                <th>Cron</th>
-                <th>Channel</th>
-                <th>TZ</th>
+                <th>When</th>
                 <th>Model</th>
               </tr>
             </thead>
             <tbody>
               {d.schedules.map((s) => (
                 <tr key={s.name}>
-                  <td>{s.name}</td>
+                  <td>
+                    <div>{s.name}</div>
+                    <div className="mono small">{s.channelLabel}</div>
+                  </td>
                   <td>
                     <Badge on={s.enabled} />
                   </td>
-                  <td className="mono small">{s.cron}</td>
-                  <td className="mono">{s.channel}</td>
-                  <td>{s.timezone ?? '—'}</td>
-                  <td>{s.model ?? '—'}</td>
+                  <td>
+                    <div>{humanCron(s.cron)}</div>
+                    <div className="mono small">{s.cron}</div>
+                  </td>
+                  <td>
+                    {s.model ? (
+                      s.model
+                    ) : (
+                      <span className="small">{d.defaultModel} · default</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

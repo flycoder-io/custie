@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { paths } from '../paths';
+import { loadEnvFiles } from '../config';
 import { createApiRouter } from './api';
 
 export const DEFAULT_DASHBOARD_PORT = 4747;
@@ -49,6 +50,10 @@ export async function startDashboardServer(
   preferredPort = DEFAULT_DASHBOARD_PORT,
   host = DEFAULT_DASHBOARD_HOST,
 ): Promise<DashboardServer> {
+  // Pull in the active profile's config.env so endpoints can read settings
+  // like CUSTIE_MODEL. Safe to call even when nothing is configured.
+  loadEnvFiles();
+
   const app = new Hono();
 
   app.route('/api', createApiRouter());

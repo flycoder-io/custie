@@ -16,6 +16,7 @@ export interface Schedule {
   enabled: boolean;
   cron: string;
   channel: string;
+  channelLabel: string;
   timezone?: string;
   model?: string;
 }
@@ -59,9 +60,12 @@ export const api = {
   profile: () => get<{ profile: string }>('/profile'),
   channels: () => get<{ channels: ChannelRow[] }>('/channels'),
   automations: () =>
-    get<{ schedules: Schedule[]; triggers: Trigger[]; mention_triggers: MentionTrigger[] }>(
-      '/automations',
-    ),
+    get<{
+      schedules: Schedule[];
+      triggers: Trigger[];
+      mention_triggers: MentionTrigger[];
+      defaultModel: string;
+    }>('/automations'),
   profiles: () => get<{ profiles: ProfileRow[] }>('/profiles'),
   sessions: () => get<{ sessions: SessionRow[] }>('/sessions'),
   logs: (error: boolean) =>
