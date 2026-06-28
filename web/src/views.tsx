@@ -24,30 +24,46 @@ export function ChannelsView() {
   const q = useQuery({ queryKey: ['channels'], queryFn: api.channels });
   return (
     <Async q={q}>
-      {(d) => (
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Name</th>
-              <th>cwd</th>
-              <th>Model</th>
-              <th>Access</th>
-            </tr>
-          </thead>
-          <tbody>
-            {d.channels.map((c) => (
-              <tr key={c.id}>
-                <td className="mono">{c.id}</td>
-                <td>{c.name ?? '—'}</td>
-                <td className="mono small">{c.cwd}</td>
-                <td>{c.model ?? '—'}</td>
-                <td>{c.access ? JSON.stringify(c.access) : '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      {(d) => {
+        const configured = d.channels.filter((c) => c.configured).length;
+        return (
+          <>
+            <p className="muted">
+              {d.channels.length} channels · {configured} configured ·{' '}
+              {d.channels.length - configured} on defaults
+            </p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Channel</th>
+                  <th>Config</th>
+                  <th>cwd</th>
+                  <th>Model</th>
+                  <th>Access</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.channels.map((c) => (
+                  <tr key={c.id} className={c.configured ? '' : 'dim'}>
+                    <td>
+                      <div>#{c.name}</div>
+                      <div className="mono small">{c.id}</div>
+                    </td>
+                    <td>
+                      <span className={`badge ${c.configured ? 'on' : 'off'}`}>
+                        {c.configured ? 'configured' : 'default'}
+                      </span>
+                    </td>
+                    <td className="mono small">{c.cwd ?? '—'}</td>
+                    <td>{c.model ?? '—'}</td>
+                    <td>{c.access ? JSON.stringify(c.access) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        );
+      }}
     </Async>
   );
 }

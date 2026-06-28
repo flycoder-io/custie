@@ -6,6 +6,7 @@ import { getProfile } from '../profile';
 import { loadChannels } from '../channels';
 import { loadAutomations } from '../automations/config';
 import { listProfiles, isServiceRunning } from '../commands/profiles';
+import { listMemberChannels } from '../store/channel-cache';
 import { SessionStore } from '../store/session-store';
 
 /** Read the last `limit` lines of a log file, or an empty array if absent. */
@@ -28,9 +29,48 @@ export function createApiRouter(): Hono {
   // show "you are viewing profile X" without guessing.
   api.get('/profile', (c) => c.json({ profile: getProfile() }));
 
+  // All channels the bot is a member of (from the local channel cache), merged
+  // with their channels.yml overrides. Channels without an override run on the
+  // global defaults (CLAUDE_CWD / CUSTIE_MODEL / global access) and are flagged
+  // `configured: false`. A channels.yml entry that isn't a current member (rare)
+  // is still listed so nothing silently disappears.
   api.get('/channels', (c) => {
-    const { channels } = loadChannels();
-    const list = Object.entries(channels).map(([id, entry]) => ({ id, ...entry }));
+    const { channels: configured } = loadChannels();
+    const members = listMemberChannels();
+    const seen = new Set<string>();
+
+    const list = members.map((m) => {
+      seen.add(m.id);
+      const entry = configured[m.id];
+      return {
+        id: m.id,
+        name: m.name,
+        purpose: m.purpose ?? undefined,
+        member: true,
+        configured: !!entry,
+        cwd: entry?.cwd,
+        model: entry?.model,
+        access: entry?.access,
+      };
+    });
+
+    // Configured channels the cache doesn't know about (e.g. cache not yet
+    // refreshed, or bot removed but config left behind).
+    for (const [id, entry] of Object.entries(configured)) {
+      if (seen.has(id)) continue;
+      list.push({
+        id,
+        name: entry.name ?? id,
+        purpose: undefined,
+        member: false,
+        configured: true,
+        cwd: entry.cwd,
+        model: entry.model,
+        access: entry.access,
+      });
+    }
+
+    list.sort((a, b) => a.name.localeCompare(b.name));
     return c.json({ channels: list });
   });
 

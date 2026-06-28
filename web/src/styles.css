@@ -123,6 +123,10 @@ h3 {
   color: var(--muted);
 }
 
+tr.dim td {
+  color: var(--muted);
+}
+
 .error {
   color: #f85149;
 }

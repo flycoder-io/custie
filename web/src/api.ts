@@ -2,8 +2,11 @@
 
 export interface ChannelRow {
   id: string;
-  name?: string;
-  cwd: string;
+  name: string;
+  purpose?: string;
+  member: boolean;
+  configured: boolean;
+  cwd?: string;
   access?: unknown;
   model?: string;
 }
