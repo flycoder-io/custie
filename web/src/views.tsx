@@ -101,7 +101,7 @@ export function AutomationsView() {
               </tr>
             </thead>
             <tbody>
-              {d.schedules.map((s) => (
+              {[...d.schedules].sort((a, b) => a.name.localeCompare(b.name)).map((s) => (
                 <tr key={s.name}>
                   <td>
                     <div>{s.name}</div>
@@ -142,7 +142,7 @@ export function AutomationsView() {
               </tr>
             </thead>
             <tbody>
-              {d.triggers.map((t) => (
+              {[...d.triggers].sort((a, b) => a.name.localeCompare(b.name)).map((t) => (
                 <tr key={t.name}>
                   <td>{t.name}</td>
                   <td>
@@ -171,7 +171,7 @@ export function AutomationsView() {
               </tr>
             </thead>
             <tbody>
-              {d.mention_triggers.map((m) => (
+              {[...d.mention_triggers].sort((a, b) => a.name.localeCompare(b.name)).map((m) => (
                 <tr key={m.name}>
                   <td>{m.name}</td>
                   <td>
