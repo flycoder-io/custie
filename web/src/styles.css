@@ -127,6 +127,13 @@ tr.dim td {
   color: var(--muted);
 }
 
+.caption {
+  color: var(--muted);
+  font-size: 12px;
+  margin: -2px 0 10px;
+  max-width: 70ch;
+}
+
 .error {
   color: #f85149;
 }

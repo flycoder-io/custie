@@ -85,6 +85,7 @@ export function AutomationsView() {
       {(d) => (
         <>
           <h3>Schedules ({d.schedules.length})</h3>
+          <p className="caption">Run a prompt on a cron schedule, posting the result to a channel.</p>
           <table>
             <thead>
               <tr>
@@ -121,6 +122,10 @@ export function AutomationsView() {
           </table>
 
           <h3>Triggers ({d.triggers.length})</h3>
+          <p className="caption">
+            Fire when a message's text matches a pattern (top-level messages only) and respond in
+            the same channel.
+          </p>
           <table>
             <thead>
               <tr>
@@ -147,6 +152,10 @@ export function AutomationsView() {
           </table>
 
           <h3>Mention triggers ({d.mention_triggers.length})</h3>
+          <p className="caption">
+            Fire when a specific user is @-mentioned (any channel, including thread replies) and
+            forward a summary to a separate channel.
+          </p>
           <table>
             <thead>
               <tr>
