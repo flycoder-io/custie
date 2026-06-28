@@ -3,6 +3,11 @@ import { useState } from 'react';
 import cronstrue from 'cronstrue';
 import { api } from './api';
 
+/** Capitalise the first character, e.g. "sonnet" → "Sonnet". */
+function cap(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
 /** Human-readable cron, e.g. "0 6 * * 6" → "At 06:00 AM, only on Saturday". */
 function humanCron(expr: string): string {
   try {
@@ -111,9 +116,9 @@ export function AutomationsView() {
                   </td>
                   <td>
                     {s.model ? (
-                      s.model
+                      cap(s.model)
                     ) : (
-                      <span className="small">{d.defaultModel} · default</span>
+                      <span className="small">{cap(d.defaultModel)}</span>
                     )}
                   </td>
                 </tr>
