@@ -28,6 +28,7 @@ export interface Trigger {
   patterns: string[];
   channels: string[];
   cooldown: number;
+  prompt: string;
 }
 
 export interface MentionTrigger {
@@ -35,6 +36,7 @@ export interface MentionTrigger {
   enabled: boolean;
   user: string;
   target_channel: string;
+  prompt: string;
 }
 
 export interface ProfileRow {

@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Fragment, useState } from 'react';
 import cronstrue from 'cronstrue';
-import { api, type Schedule } from './api';
+import { api } from './api';
+
+/** What the prompt modal needs to render: a heading, optional subtitle, body. */
+type PromptModal = { title: string; subtitle?: string; prompt: string };
 
 /** Capitalise the first character, e.g. "sonnet" → "Sonnet". */
 function cap(s: string): string {
@@ -128,7 +131,7 @@ export function ChannelsView() {
 
 export function AutomationsView() {
   const q = useQuery({ queryKey: ['automations'], queryFn: api.automations });
-  const [sel, setSel] = useState<Schedule | null>(null);
+  const [sel, setSel] = useState<PromptModal | null>(null);
   return (
     <Async q={q}>
       {(d) => (
@@ -149,7 +152,17 @@ export function AutomationsView() {
             </thead>
             <tbody>
               {[...d.schedules].sort((a, b) => a.name.localeCompare(b.name)).map((s) => (
-                <tr key={s.name} className="clickable" onClick={() => setSel(s)}>
+                <tr
+                  key={s.name}
+                  className="clickable"
+                  onClick={() =>
+                    setSel({
+                      title: s.name,
+                      subtitle: `${s.channelLabel} · ${humanCron(s.cron)}`,
+                      prompt: s.prompt,
+                    })
+                  }
+                >
                   <td>
                     <div>{s.name}</div>
                     <div className="mono small">{s.channelLabel}</div>
@@ -174,11 +187,7 @@ export function AutomationsView() {
           </table>
 
           {sel && (
-            <Modal
-              title={sel.name}
-              subtitle={`${sel.channelLabel} · ${humanCron(sel.cron)}`}
-              onClose={() => setSel(null)}
-            >
+            <Modal title={sel.title} subtitle={sel.subtitle} onClose={() => setSel(null)}>
               <pre className="prompt">{sel.prompt}</pre>
             </Modal>
           )}
@@ -200,7 +209,17 @@ export function AutomationsView() {
             </thead>
             <tbody>
               {[...d.triggers].sort((a, b) => a.name.localeCompare(b.name)).map((t) => (
-                <tr key={t.name}>
+                <tr
+                  key={t.name}
+                  className="clickable"
+                  onClick={() =>
+                    setSel({
+                      title: t.name,
+                      subtitle: `patterns: ${t.patterns.join(', ')}`,
+                      prompt: t.prompt,
+                    })
+                  }
+                >
                   <td>{t.name}</td>
                   <td>
                     <Badge on={t.enabled} />
@@ -229,7 +248,17 @@ export function AutomationsView() {
             </thead>
             <tbody>
               {[...d.mention_triggers].sort((a, b) => a.name.localeCompare(b.name)).map((m) => (
-                <tr key={m.name}>
+                <tr
+                  key={m.name}
+                  className="clickable"
+                  onClick={() =>
+                    setSel({
+                      title: m.name,
+                      subtitle: `@${m.user} → ${m.target_channel}`,
+                      prompt: m.prompt,
+                    })
+                  }
+                >
                   <td>{m.name}</td>
                   <td>
                     <Badge on={m.enabled} />
