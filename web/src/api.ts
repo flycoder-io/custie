@@ -19,6 +19,7 @@ export interface Schedule {
   channelLabel: string;
   timezone?: string;
   model?: string;
+  prompt: string;
 }
 
 export interface Trigger {

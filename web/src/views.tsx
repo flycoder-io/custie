@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Fragment, useState } from 'react';
 import cronstrue from 'cronstrue';
-import { api } from './api';
+import { api, type Schedule } from './api';
 
 /** Capitalise the first character, e.g. "sonnet" → "Sonnet". */
 function cap(s: string): string {
@@ -33,6 +33,36 @@ function Async<T>({
 
 function Badge({ on, label }: { on: boolean; label?: string }) {
   return <span className={`badge ${on ? 'on' : 'off'}`}>{label ?? (on ? 'yes' : 'no')}</span>;
+}
+
+/** Centered modal dialog; closes on backdrop click or the × button. */
+function Modal({
+  title,
+  subtitle,
+  onClose,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <div className="modal-title">{title}</div>
+            {subtitle && <div className="mono small">{subtitle}</div>}
+          </div>
+          <button className="modal-close" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
+      </div>
+    </div>
+  );
 }
 
 export function ChannelsView() {
@@ -98,12 +128,16 @@ export function ChannelsView() {
 
 export function AutomationsView() {
   const q = useQuery({ queryKey: ['automations'], queryFn: api.automations });
+  const [sel, setSel] = useState<Schedule | null>(null);
   return (
     <Async q={q}>
       {(d) => (
         <>
           <h3>Schedules ({d.schedules.length})</h3>
-          <p className="caption">Run a prompt on a cron schedule, posting the result to a channel.</p>
+          <p className="caption">
+            Run a prompt on a cron schedule, posting the result to a channel. Click a row to see its
+            prompt.
+          </p>
           <table>
             <thead>
               <tr>
@@ -115,7 +149,7 @@ export function AutomationsView() {
             </thead>
             <tbody>
               {[...d.schedules].sort((a, b) => a.name.localeCompare(b.name)).map((s) => (
-                <tr key={s.name}>
+                <tr key={s.name} className="clickable" onClick={() => setSel(s)}>
                   <td>
                     <div>{s.name}</div>
                     <div className="mono small">{s.channelLabel}</div>
@@ -138,6 +172,16 @@ export function AutomationsView() {
               ))}
             </tbody>
           </table>
+
+          {sel && (
+            <Modal
+              title={sel.name}
+              subtitle={`${sel.channelLabel} · ${humanCron(sel.cron)}`}
+              onClose={() => setSel(null)}
+            >
+              <pre className="prompt">{sel.prompt}</pre>
+            </Modal>
+          )}
 
           <h3>Triggers ({d.triggers.length})</h3>
           <p className="caption">
