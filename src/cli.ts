@@ -14,6 +14,7 @@ import {
   runSlackCmd,
   runProfiles,
   runXeroCmd,
+  runDashboard,
 } from './commands';
 import { getProfile } from './profile';
 
@@ -35,6 +36,7 @@ const USAGE = `
     slack        Query Slack (channels, users, post messages)
     profiles     List instances and their service status
     xero         Connect to Xero and expose it as an MCP server
+    dashboard    Start the read-only management dashboard (web UI)
 
   Options:
     -p, --profile <name>   Target a named instance (default: the unnamed instance)
@@ -135,6 +137,10 @@ async function main(): Promise<void> {
 
     case 'xero':
       await runXeroCmd(args.slice(1));
+      break;
+
+    case 'dashboard':
+      await runDashboard(args.slice(1));
       break;
 
     case '-v':
